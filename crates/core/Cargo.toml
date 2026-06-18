@@ -1,0 +1,26 @@
+[package]
+name = "rvm2glb-core"
+version.workspace = true
+edition.workspace = true
+description = "RVM → GLB conversion kernel (merged / instanced / standard)"
+
+[lib]
+name = "rvm2glb"
+path = "src/lib.rs"
+
+[features]
+default = ["optimize"]
+# meshoptimizer pass (simplify + vertex-cache reorder). Pulls in a C++ build, so the
+# wasm shell drops it with --no-default-features. Without it weld +
+# degenerate cull + compaction still run; output stays geometrically identical at the
+# default target-error 0 (only vertex order differs). TODO: build meshopt for wasm too.
+optimize = ["dep:meshopt", "dep:bytemuck"]
+
+[dependencies]
+md5 = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+meshopt = { version = "0.6", optional = true }
+bytemuck = { version = "1", features = ["extern_crate_alloc"], optional = true }
+tess2-rust = "1.1.0"

@@ -1,0 +1,14 @@
+[package]
+name = "rvm2glb-cli"
+version.workspace = true
+edition.workspace = true
+description = "RVM → GLB converter (command-line front end)"
+
+[[bin]]
+name = "rvm2glb"
+path = "src/main.rs"
+
+[dependencies]
+rvm2glb-core = { path = "../core" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

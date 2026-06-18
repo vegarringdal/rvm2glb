@@ -1,0 +1,24 @@
+[package]
+name = "rvm2glb-wasm"
+version.workspace = true
+edition.workspace = true
+description = "WebAssembly shell for rvm2glb: RVM → GLB in the browser (Worker + OPFS)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Compile the C++ meshoptimizer into the wasm bundle (vertex-cache reorder + simplify),
+# for byte-parity with the native build. Needs `clang` on the build machine — the meshopt
+# crate ships freestanding `include_wasm32` headers, so NO WASI SDK / sysroot is required
+# Off by default so the demo builds without a C toolchain.
+optimize = ["rvm2glb-core/optimize"]
+
+[dependencies]
+# meshopt is dropped by default in the browser build; enable the
+# `optimize` feature (and have clang installed) to compile it in.
+rvm2glb-core = { path = "../core", default-features = false }
+wasm-bindgen = "0.2"
+# turn wasm aborts (incl. OOM) into a readable console message instead of a bare trap.
+console_error_panic_hook = "0.1"

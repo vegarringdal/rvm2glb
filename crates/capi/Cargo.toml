@@ -1,0 +1,12 @@
+[package]
+name = "rvm2glb-capi"
+version.workspace = true
+edition.workspace = true
+description = "C ABI for rvm2glb: RVM → GLB with streaming I/O + progress callbacks"
+
+[lib]
+name = "rvm2glb_capi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+rvm2glb-core = { path = "../core" }

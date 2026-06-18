@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/cli", "crates/capi", "crates/wasm"]
+# wasm builds for wasm32 only; keep it out of native `cargo build`/`test` defaults.
+default-members = ["crates/core", "crates/cli", "crates/capi"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+# Windows cross-compile linker config lives in .cargo/config.toml (cargo ignores
+# [target.*] linker/ar keys placed in Cargo.toml).

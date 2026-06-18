@@ -1,0 +1,9 @@
+# Windows cross-compilation (x86_64-pc-windows-gnu) from Linux.
+#
+# These [target.*] linker/ar keys are honoured here but IGNORED in Cargo.toml.
+# The GNU linker is used directly (no dlltool); setting it explicitly avoids the
+# dlltool lookup that fails when mingw-w64 is installed via apt but the wrapper
+# binary has a different name on some distros.
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"

@@ -1,0 +1,81 @@
+name: Deploy wasm demo to GitHub Pages
+
+# Builds wasm-demo (wasm-pack + Vite) and publishes it to GitHub Pages.
+# One-time setup: repo Settings → Pages → Build and deployment → Source =
+# "GitHub Actions". The base path is derived from the repo name, so a project
+# site served at https://<owner>.github.io/<repo>/ works without edits.
+#
+# The demo is built without meshopt (npm run build → build:wasm), so no C toolchain
+# is needed on the runner; at the default settings the output is geometrically identical
+# to native. To ship meshopt in the deployed demo, install clang and swap the build to
+# `build:wasm:opt` (see wasm-demo/README.md).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'wasm-demo/**'
+      - 'Cargo.toml'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# one deploy at a time; let a newer push supersede an in-flight run
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: pages-cargo-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+
+      # prebuilt wasm-pack (fast, no compile)
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build demo
+        working-directory: wasm-demo
+        run: |
+          npm install
+          # GitHub Pages project site is served under /<repo>/
+          VITE_BASE="/${GITHUB_REPOSITORY#*/}/" npm run build
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: wasm-demo/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
