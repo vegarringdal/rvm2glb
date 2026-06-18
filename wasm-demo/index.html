@@ -23,6 +23,7 @@
         --muted: #8a8a96;
         --accent: #34d3b0;
         --accent-ink: #042b22;
+        --warn: #f5c518;
       }
       * { box-sizing: border-box; }
       html, body { margin: 0; height: 100%; }
@@ -44,6 +45,8 @@
         margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap;
         overflow: hidden; text-overflow: ellipsis; max-width: 38vw;
       }
+      /* converting / zipping: yellow so progress grabs focus */
+      #status.busy { color: var(--warn); font-weight: 600; }
       .icon-btn {
         background: transparent; border: 0; color: var(--text); cursor: pointer;
         padding: 6px; border-radius: 6px; display: inline-flex; align-items: center;
@@ -271,7 +274,7 @@
 
     <footer>
       <span id="source" style="color: var(--muted); font-size: 12px">no file loaded</span>
-      <button id="downloadAll" class="btn btn-ghost" disabled>Download all</button>
+      <button id="downloadAll" class="btn btn-ghost" disabled>Download all (.zip)</button>
     </footer>
 
     <div id="backdrop" class="backdrop"></div>

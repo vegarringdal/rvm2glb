@@ -117,7 +117,10 @@ async function runStreaming(
       names.delete(handle);
       const all = concat(chunks);
       count += 1;
-      post({ kind: 'file', name, bytes: all.buffer }, [all.buffer]);
+      // `all` is a fresh Uint8Array, so its buffer is a real ArrayBuffer (TS only widens
+      // the type to ArrayBufferLike); the cast keeps it transferable.
+      const buf = all.buffer as ArrayBuffer;
+      post({ kind: 'file', name, bytes: buf }, [buf]);
     },
     progress: (outputIndex: number, name: string, nodes: number) =>
       post({ kind: 'progress', outputIndex, name, nodes }),

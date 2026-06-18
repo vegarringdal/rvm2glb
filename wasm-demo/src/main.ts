@@ -1,4 +1,5 @@
 import { RvmConverter, type ConvertOpts, type OutputFile } from './rvmConvert';
+import { zipBlobs } from './zip';
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
@@ -42,6 +43,18 @@ converter
   .version()
   .then((v) => (statusEl.textContent = `rvm2glb ${v} — ready`))
   .catch((e) => (statusEl.textContent = `failed to load wasm: ${e.message}`));
+
+// Inputs disabled while a conversion is running (incl. the file picker + mode select).
+const CONTROLS = [
+  'file', 'mode', 'level', 'tolerance', 'lineWidth', 'removeEmpty', 'highlight',
+  'alignSegments', 'cleanupPosition', 'cleanupPrecision', 'meshoptThreshold', 'meshoptTargetError',
+];
+
+function setBusy(busy: boolean): void {
+  for (const id of CONTROLS) $<HTMLInputElement>(id).disabled = busy;
+  statusEl.classList.toggle('busy', busy); // yellow while converting
+  if (busy) downloadAll.disabled = true;
+}
 
 function readOpts(): ConvertOpts {
   return {
@@ -117,8 +130,8 @@ fileInput.addEventListener('change', async () => {
   if (!file) return;
   sourceEl.textContent = file.name;
   filesEl.replaceChildren();
-  downloadAll.disabled = true;
   current = [];
+  setBusy(true);
   try {
     const result = await converter.convert(file, readOpts(), {
       onStatus: (m) => (statusEl.textContent = `${file.name}: ${m}`),
@@ -127,7 +140,6 @@ fileInput.addEventListener('change', async () => {
     });
     current = result.files;
     renderFiles(result.files);
-    downloadAll.disabled = result.files.length === 0;
     document.body.classList.add('info-open');
     const total = result.files.reduce((n, f) => n + f.blob.size, 0);
     statusEl.textContent = `${file.name}: ${result.files.length} file(s), ${(total / 1e6).toFixed(2)} MB in ${result.ms} ms`;
@@ -137,8 +149,33 @@ fileInput.addEventListener('change', async () => {
   } catch (e) {
     statusEl.textContent = `${file.name}: error — ${(e as Error).message}`;
   } finally {
+    setBusy(false);
+    downloadAll.disabled = current.length === 0;
     fileInput.value = '';
   }
 });
 
-downloadAll.addEventListener('click', () => current.forEach(download));
+// Bundle every output into one ZIP — a model can have 150+ sites, and browsers block
+// firing that many individual downloads.
+downloadAll.addEventListener('click', async () => {
+  if (current.length === 0) return;
+  if (current.length === 1) {
+    download(current[0]);
+    return;
+  }
+  const prev = statusEl.textContent;
+  downloadAll.disabled = true;
+  statusEl.classList.add('busy');
+  statusEl.textContent = `zipping ${current.length} files…`;
+  try {
+    const blob = await zipBlobs(current.map((f) => ({ name: f.name, blob: f.blob })));
+    const base = (sourceEl.textContent || 'rvm2glb').replace(/\.[^.]*$/, '');
+    download({ name: `${base}.zip`, blob });
+    statusEl.textContent = prev;
+  } catch (e) {
+    statusEl.textContent = `zip failed — ${(e as Error).message}`;
+  } finally {
+    statusEl.classList.remove('busy');
+    downloadAll.disabled = false;
+  }
+});

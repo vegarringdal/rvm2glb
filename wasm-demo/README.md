@@ -58,7 +58,10 @@ tolerance; line width; align-segments; weld + precision; meshopt threshold + err
 that with weld on you can't recompute good per-vertex normals afterwards), a centre
 **`<model-viewer>`**, and a **right** output-files panel
 — one row per produced GLB / `status_file.json` with **View** (loads it into the viewer)
-and **Download** buttons. The footer has the source name + **Download all**.
+and **Download** buttons. The footer has the source name + **Download all**, which
+bundles every output into one `.zip` (streamed/compressed off-thread via
+[fflate](https://github.com/101arrowz/fflate)) — a model can have 150+ sites, and
+browsers block firing that many individual downloads.
 
 ## How it works
 
