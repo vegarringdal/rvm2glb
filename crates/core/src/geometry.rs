@@ -23,11 +23,41 @@ pub enum GeometryKind {
     FacetGroup,
 }
 
+impl GeometryKind {
+    /// Stable string name (used by the `--extract-json` structure dump).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GeometryKind::Pyramid => "Pyramid",
+            GeometryKind::Box => "Box",
+            GeometryKind::RectangularTorus => "RectangularTorus",
+            GeometryKind::CircularTorus => "CircularTorus",
+            GeometryKind::EllipticalDish => "EllipticalDish",
+            GeometryKind::SphericalDish => "SphericalDish",
+            GeometryKind::Snout => "Snout",
+            GeometryKind::Cylinder => "Cylinder",
+            GeometryKind::Sphere => "Sphere",
+            GeometryKind::Line => "Line",
+            GeometryKind::FacetGroup => "FacetGroup",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeometryType {
     Primitive,
     Obstruction,
     Insulation,
+}
+
+impl GeometryType {
+    /// Stable string name (used by the `--extract-json` structure dump).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GeometryType::Primitive => "Primitive",
+            GeometryType::Obstruction => "Obstruction",
+            GeometryType::Insulation => "Insulation",
+        }
+    }
 }
 
 // ─── Connection ──────────────────────────────────────────────────────────

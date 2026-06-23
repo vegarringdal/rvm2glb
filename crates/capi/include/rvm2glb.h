@@ -44,9 +44,15 @@ typedef struct {
   float meshopt_target_error;
   float tolerance;
   float line_width;
+  /* Include RVM Line primitives. false (the default) skips them entirely —
+   * they are numerous and add visual noise. */
+  bool include_line;
   bool align_segments;
   bool highlight_instance;
   bool dry_run;
+  /* Extract the RVM structure as JSON (<site>.json + base.json) instead of GLB.
+   * Overrides `mode`; honours `level`. */
+  bool extract_json;
   const char *source_name;
 } rvm2glb_options;
 

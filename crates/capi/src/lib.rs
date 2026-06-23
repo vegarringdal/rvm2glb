@@ -36,9 +36,15 @@ pub struct Rvm2GlbOptions {
     pub meshopt_target_error: f32,
     pub tolerance: f32,
     pub line_width: f32,
+    /// Include RVM Line primitives. `false` (the default) skips them entirely —
+    /// they are numerous and add visual noise.
+    pub include_line: bool,
     pub align_segments: bool,
     pub highlight_instance: bool,
     pub dry_run: bool,
+    /// Extract the RVM structure as JSON (`<site>.json` + `base.json`) instead of GLB.
+    /// Overrides `mode`; honours `level`.
+    pub extract_json: bool,
     pub source_name: *const c_char,
 }
 
@@ -162,9 +168,11 @@ pub unsafe extern "C" fn rvm2glb_convert(
         tolerance: o.tolerance,
         mode,
         line_width: o.line_width,
+        include_line: o.include_line,
         align_segments: o.align_segments,
         highlight_instance: o.highlight_instance,
         dry_run: o.dry_run,
+        extract_json: o.extract_json,
         source_name,
     };
 
@@ -196,7 +204,9 @@ pub unsafe extern "C" fn rvm2glb_convert(
 /// ABI version of this library (bump on any breaking change to the C surface).
 #[unsafe(no_mangle)]
 pub extern "C" fn rvm2glb_capi_abi_version() -> u32 {
-    1
+    // 2: added `extract_json` to rvm2glb_options (struct layout change).
+    // 3: added `include_line` to rvm2glb_options (struct layout change).
+    3
 }
 
 #[cfg(test)]
@@ -261,10 +271,12 @@ mod tests {
             meshopt_threshold: 0.75,
             meshopt_target_error: 0.0,
             tolerance: 0.01,
-            line_width: 0.05,
+            line_width: 0.005,
+            include_line: false,
             align_segments: false,
             highlight_instance: false,
             dry_run: false,
+            extract_json: false,
             source_name: std::ptr::null(),
         }
     }

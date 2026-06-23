@@ -34,6 +34,12 @@ Three output modes (`--mode`):
 RVM **Line** primitives (which the C++ tool skipped) are drawn as a thin "+" cross
 of two quads swept along the line, so they are selectable in a triangle viewer.
 
+Alternatively, `--extract-json` dumps the **RVM structure as JSON** instead of
+converting to GLB: one `<site>.json` per root (the full hierarchy, each primitive with
+its kind, type, opacity, transform matrix, and parametric params) plus a `base.json`
+index. FacetGroups are summarised to polygon/vertex counts. No tessellation — handy for
+inspecting or diffing model structure. See [Output](#output).
+
 ## Crates
 
 | Crate | Kind | What it is |
@@ -86,6 +92,7 @@ rvm2glb --input <FILE> [OPTIONS]
 | `-i, --input <FILE>` | *(required)* | RVM input file. |
 | `-o, --output <DIR>` | `./exports/` | Output folder (created if missing). |
 | `--mode <MODE>` | `merged` | `merged` (one mesh per colour), `instanced` (node per occurrence, shared meshes), or `standard` (one mesh per component, no merge/dedup). |
+| `-j, --extract-json` | `false` | Dump the RVM structure as JSON (`<site>.json` + `base.json`) instead of GLB. Overrides `--mode`; honours `--level`. |
 | `-x, --dry-run` | `false` | Parse only; do not write files. |
 | `-l, --level <N>` | `0` | Hierarchy depth at which to split into separate GLB files (`0` = site). |
 | `-r, --remove-empty <0\|1>` | `1` | Drop nodes/branches with no geometry (all modes). Disable with `-r 0`. |
@@ -119,6 +126,9 @@ rvm2glb -i model.rvm --line-width 0.1
 # Split one GLB per second-level container (e.g. zone)
 rvm2glb -i model.rvm -l 1
 
+# Extract the RVM structure as JSON (no tessellation) → base.json + <site>.json
+rvm2glb -i model.rvm --extract-json
+
 # Dry run — parse only
 rvm2glb -i model.rvm -x
 ```
@@ -139,6 +149,24 @@ extras — selection is per glTF node via its `name` (= RVM node id).
 the parent path, folded into `file_name` when split deeper so same-named roots stay
 distinct), and the model bbox (`min_*`/`max_*`).
 
+### JSON extraction (`--extract-json`)
+
+With `--extract-json` the converter writes one `<site>.json` per root (named like the
+GLBs, with the same `parent_hash` suffix when split below site level) plus a `base.json`
+index — no tessellation, no GLB.
+
+`base.json` holds the RVM `header`, `source_file_name`, `export_lvl`, a `sites` string
+array of root names, a `files` array (per-site `file_name`, `parent`/`parent_hash`, and
+world bbox `min_*`/`max_*`), and `warnings`.
+
+Each `<site>.json` is the full node tree. Every node carries `id`, `name`, `opacity`,
+`color` (hex RGB), a `primitives` array, and a recursive `children` array. Each
+primitive records its `type` (`Primitive` / `Insulation` / `Obstruction`), `kind`
+(`Box`, `Cylinder`, `Snout`, …, `FacetGroup`), `opacity`, the raw 12-float column-major
+RVM `matrix`, and `params` (the parametric fields). **FacetGroups are reduced to
+`{ polygons, vertices }` counts** — the raw contour data is omitted, as it would dwarf
+everything else.
+
 ## Status & roadmap
 
 **Done**
@@ -154,6 +182,8 @@ distinct), and the model bbox (`min_*`/`max_*`).
   `convert()` + I/O traits; C ABI; WebAssembly + in-browser demo (Worker + OPFS); GitHub
   Pages auto-deploy.
 - meshopt builds into wasm too (opt-in `optimize` feature, needs `clang`).
+- `--extract-json`: dump the RVM structure (hierarchy + parametric primitives, matrices,
+  colours) to JSON instead of GLB — `base.json` index + one `<site>.json` per root.
 
 **Planned / ideas**
 

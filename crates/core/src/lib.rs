@@ -9,6 +9,7 @@ pub mod geometry;
 pub mod glb_writer;
 pub mod instancing;
 pub mod io;
+pub mod json_writer;
 pub mod linalg;
 pub mod rvm_parser;
 pub mod status_writer;

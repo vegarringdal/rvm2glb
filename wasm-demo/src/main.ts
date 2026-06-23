@@ -34,7 +34,7 @@ const bindRange = (id: string, out: string, fmt: (v: number) => string) => {
   update();
 };
 bindRange('tolerance', 'tolVal', (v) => v.toFixed(3));
-bindRange('lineWidth', 'lwVal', (v) => v.toFixed(2));
+bindRange('lineWidth', 'lwVal', (v) => v.toFixed(3));
 bindRange('meshoptThreshold', 'mtVal', (v) => v.toFixed(2));
 bindRange('meshoptTargetError', 'meVal', (v) => v.toFixed(3));
 
@@ -46,7 +46,7 @@ converter
 
 // Inputs disabled while a conversion is running (incl. the file picker + mode select).
 const CONTROLS = [
-  'file', 'mode', 'level', 'tolerance', 'lineWidth', 'removeEmpty', 'highlight',
+  'file', 'mode', 'level', 'tolerance', 'includeLine', 'lineWidth', 'removeEmpty', 'highlight',
   'alignSegments', 'cleanupPosition', 'cleanupPrecision', 'meshoptThreshold', 'meshoptTargetError',
 ];
 
@@ -61,6 +61,7 @@ function readOpts(): ConvertOpts {
     mode: Number($<HTMLSelectElement>('mode').value),
     level: Number($<HTMLInputElement>('level').value),
     tolerance: Number($<HTMLInputElement>('tolerance').value),
+    includeLine: $<HTMLInputElement>('includeLine').checked,
     lineWidth: Number($<HTMLInputElement>('lineWidth').value),
     removeEmpty: $<HTMLInputElement>('removeEmpty').checked,
     highlight: $<HTMLInputElement>('highlight').checked,

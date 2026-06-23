@@ -16,6 +16,7 @@ use crate::geometry::*;
 use crate::glb_writer::{Cleanup, GlbWriter};
 use crate::instancing::shape_key;
 use crate::io::{InputHandle, OutputSink};
+use crate::json_writer::{base_json, site_json};
 use crate::linalg::{BBox3f, Mat3x4f, Vec3f, transform_bbox};
 use crate::status_writer::status_json;
 use crate::tessellator::Tessellator;
@@ -150,8 +151,10 @@ pub struct RvmParser {
     dry_run: bool,
     mode: OutputMode,
     line_width: f32,
+    include_line: bool,
     align_segments: bool,
     highlight_instance: bool,
+    extract_json: bool,
 
     // input stream (read in ≤buf-sized chunks via InputHandle::read_at)
     input: Option<Box<dyn InputHandle>>,
@@ -169,6 +172,7 @@ pub struct RvmParser {
     source_file_name: String,
     name_stack: Vec<String>, // container names, parallel to parent_stack
     current_root_parents: Vec<String>, // ancestor names captured at the current root
+    current_root_bbox: BBox3f, // world bounds of the current root (JSON extract only)
 
     header: HeaderBlock,
     color_store: ColorStore,
@@ -197,8 +201,10 @@ impl RvmParser {
             dry_run: opts.dry_run,
             mode: opts.mode,
             line_width: opts.line_width,
+            include_line: opts.include_line,
             align_segments: opts.align_segments,
             highlight_instance: opts.highlight_instance,
+            extract_json: opts.extract_json,
             input: None,
             pos: 0,
             file_len: 0,
@@ -212,6 +218,7 @@ impl RvmParser {
             source_file_name: opts.source_name.clone(),
             name_stack: Vec::new(),
             current_root_parents: Vec::new(),
+            current_root_bbox: BBox3f::empty(),
             header: HeaderBlock::default(),
             color_store: ColorStore::new(),
             current_node: MetaNode::default(),
@@ -257,20 +264,32 @@ impl RvmParser {
 
         self.parse_rvm(sink, progress)?;
 
-        // Final status JSON through the same sink. Skipped in dry-run,
-        // which writes nothing.
+        // Final index JSON through the same sink. Skipped in dry-run, which writes
+        // nothing. `--extract-json` emits `base.json` (header + site list + per-site
+        // file metadata); otherwise the usual `status_file.json`.
         if !self.dry_run {
-            let json = status_json(&self.filemeta, &self.errors, &self.header);
-            match sink.open("status_file.json") {
+            let (name, json) = if self.extract_json {
+                let json = base_json(
+                    &self.filemeta,
+                    &self.errors,
+                    &self.header,
+                    &self.source_file_name,
+                    self.export_level,
+                );
+                ("base.json", json)
+            } else {
+                (
+                    "status_file.json",
+                    status_json(&self.filemeta, &self.errors, &self.header),
+                )
+            };
+            match sink.open(name) {
                 Ok(mut h) => {
                     if let Err(e) = h.write(json.as_bytes()) {
-                        self.errors
-                            .push(format!("failed writing status_file.json: {e}"));
+                        self.errors.push(format!("failed writing {name}: {e}"));
                     }
                 }
-                Err(e) => self
-                    .errors
-                    .push(format!("failed opening status_file.json: {e}")),
+                Err(e) => self.errors.push(format!("failed opening {name}: {e}")),
             }
         }
         Ok(())
@@ -492,6 +511,14 @@ impl RvmParser {
             }
         };
 
+        // RVM Line primitives are skipped unless explicitly included — they are
+        // numerous and add visual noise. Skipping here (before reading the body)
+        // excludes them from every path: streaming, merged, instanced, and JSON.
+        if geo_kind == GeometryKind::Line && !self.include_line {
+            self.pos = next_abs;
+            return;
+        }
+
         let shape = match self.parse_shape(kind, next_abs) {
             Some(s) => s,
             None => return,
@@ -502,6 +529,26 @@ impl RvmParser {
         geo.m_3x4 = m_3x4;
         geo.bbox_local = bbox_local;
         geo.bbox_world = bbox_world;
+
+        // JSON-extract path: record the parametric shape + placement only — no
+        // tessellation. The world bbox feeds the per-root bounds in `base.json`.
+        if self.extract_json {
+            self.current_root_bbox.engulf_box(&bbox_world);
+            self.current_node.primitives.push(NodePrim {
+                opacity: prim_opacity,
+                geo_type,
+                vertices: Vec::new(),
+                normals: Vec::new(),
+                indices: Vec::new(),
+                vertices_n: 0,
+                triangles_n: 0,
+                world_transform: m_3x4,
+                shape_key: 0,
+                shape: geo.shape.clone(),
+            });
+            self.pos = next_abs;
+            return;
+        }
 
         let tessellator = Tessellator::new(self.tolerance, self.line_width, self.align_segments);
         // Pass empty slices – connection-based cap removal is skipped (no connection data in stream)
@@ -672,6 +719,7 @@ impl RvmParser {
                         self.nodes.clear();
                         self.site_colors.clear();
                         self.node_count_id = 0;
+                        self.current_root_bbox = BBox3f::empty();
                     }
 
                     self.node_count_id += 1;
@@ -738,6 +786,16 @@ impl RvmParser {
         if self.current_node.id == 0 {
             return;
         }
+
+        // JSON-extract path: keep the node verbatim — every primitive with its own
+        // kind/type, no geo-type split, empty containers retained — so the dumped tree
+        // mirrors the RVM hierarchy exactly.
+        if self.extract_json {
+            let node = std::mem::take(&mut self.current_node);
+            self.nodes.insert(node.id, node);
+            return;
+        }
+
         let node = std::mem::take(&mut self.current_node);
         let rgb = node.material_id & 0x00FF_FFFF;
 
@@ -816,6 +874,18 @@ impl RvmParser {
             self.site_colors.clear();
             self.node_count_id = 0;
             self.current_root_name.clear();
+            self.current_root_bbox = BBox3f::empty();
+            return;
+        }
+
+        // JSON-extract path: write `<site>.json` (the structure tree) instead of a GLB.
+        if self.extract_json {
+            self.flush_root_json(sink, progress);
+            self.nodes.clear();
+            self.site_colors.clear();
+            self.node_count_id = 0;
+            self.current_root_name.clear();
+            self.current_root_bbox = BBox3f::empty();
             return;
         }
 
@@ -908,6 +978,70 @@ impl RvmParser {
         self.site_colors.clear();
         self.node_count_id = 0;
         self.current_root_name.clear();
+    }
+
+    /// Write the current root's structure tree as `<site>.json` and record its metadata
+    /// (file name, parent path, world bbox) for `base.json`. Mirrors `flush_root`'s file
+    /// naming (parent-hash suffix when split below site level) so JSON and GLB exports
+    /// of the same model line up. The caller clears per-root state afterwards.
+    fn flush_root_json(&mut self, sink: &mut dyn OutputSink, progress: &mut dyn FnMut(&Progress)) {
+        let json = site_json(&self.nodes);
+
+        let parent = self.current_root_parents.clone();
+        let parent_hash = if parent.is_empty() {
+            String::new()
+        } else {
+            let h = format!("{:x}", md5::compute(parent.join("/").as_bytes()));
+            h[..8].to_string()
+        };
+        let base = sanitize_filename(&self.current_root_name);
+        let filename = if parent_hash.is_empty() {
+            format!("{}.json", base)
+        } else {
+            format!("{}_{}.json", base, parent_hash)
+        };
+
+        match sink.open(&filename) {
+            Ok(mut h) => {
+                if let Err(e) = h.write(json.as_bytes()) {
+                    self.errors.push(format!("failed writing {filename}: {e}"));
+                }
+            }
+            Err(e) => self.errors.push(format!("failed opening {filename}: {e}")),
+        }
+
+        let b = self.current_root_bbox;
+        let bbox = if b.is_empty() {
+            BBox3::default()
+        } else {
+            BBox3 {
+                min_x: b.min.x,
+                min_y: b.min.y,
+                min_z: b.min.z,
+                max_x: b.max.x,
+                max_y: b.max.y,
+                max_z: b.max.z,
+            }
+        };
+
+        let output_index = self.filemeta.len() as u32;
+        let nodes = self.nodes.len() as u32;
+        self.filemeta.push(FileMeta {
+            root_name: self.current_root_name.clone(),
+            file_name: filename.clone(),
+            source_file_name: self.source_file_name.clone(),
+            md5: String::new(),
+            glb_md5: String::new(),
+            export_lvl: self.export_level,
+            parent,
+            parent_hash,
+            bbox,
+        });
+        progress(&Progress {
+            output_index,
+            output_name: &filename,
+            nodes,
+        });
     }
 }
 

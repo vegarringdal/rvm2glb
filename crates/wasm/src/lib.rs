@@ -101,9 +101,15 @@ pub struct Options {
     pub meshopt_target_error: f32,
     pub tolerance: f32,
     pub line_width: f32,
+    /// Include RVM Line primitives. `false` (the default) skips them entirely —
+    /// they are numerous and add visual noise.
+    pub include_line: bool,
     pub align_segments: bool,
     pub highlight_instance: bool,
     pub dry_run: bool,
+    /// Extract the RVM structure as JSON (`<site>.json` + `base.json`) instead of GLB.
+    /// Overrides `mode`; honours `level`.
+    pub extract_json: bool,
 }
 
 #[wasm_bindgen]
@@ -120,10 +126,12 @@ impl Options {
             meshopt_threshold: 0.75,
             meshopt_target_error: 0.0,
             tolerance: 0.01,
-            line_width: 0.05,
+            line_width: 0.005,
+            include_line: false,
             align_segments: false,
             highlight_instance: false,
             dry_run: false,
+            extract_json: false,
         }
     }
 }
@@ -149,9 +157,11 @@ fn to_core(o: &Options, source_name: String) -> ConvertOptions {
             _ => rvm2glb::OutputMode::Merged,
         },
         line_width: o.line_width,
+        include_line: o.include_line,
         align_segments: o.align_segments,
         highlight_instance: o.highlight_instance,
         dry_run: o.dry_run,
+        extract_json: o.extract_json,
         source_name,
     }
 }

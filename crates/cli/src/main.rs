@@ -41,6 +41,12 @@ struct Args {
     #[arg(short = 'x', long = "dry-run", default_value_t = false)]
     dry_run: bool,
 
+    /// Extract the RVM structure as JSON instead of GLB: one `<site>.json` per root
+    /// (full tree — hierarchy + per-primitive kind/type/params/matrix; FacetGroups as
+    /// counts) plus a `base.json` index. Overrides `--mode`; honours `--level`.
+    #[arg(short = 'j', long = "extract-json", default_value_t = false)]
+    extract_json: bool,
+
     /// Hierarchy level at which to split output files (0 = site)
     #[arg(short = 'l', long = "level", default_value_t = 0)]
     level: u8,
@@ -76,8 +82,13 @@ struct Args {
     mode: Mode,
 
     /// Width of the "+" cross drawn for RVM Line primitives (model units)
-    #[arg(long = "line-width", default_value_t = 0.05)]
+    #[arg(long = "line-width", default_value_t = 0.005)]
     line_width: f32,
+
+    /// Include RVM Line primitives. Off by default — lines are numerous and add
+    /// visual noise; when off they are skipped entirely (no geometry emitted).
+    #[arg(long = "include-line", default_value_t = false)]
+    include_line: bool,
 
     /// Round circle tessellation up to a multiple of 4 segments so adjacent
     /// primitives share boundary vertices (better flat-shading alignment, ~25%
@@ -109,9 +120,11 @@ fn main() -> anyhow::Result<()> {
         tolerance: args.tolerance,
         mode: args.mode.into(),
         line_width: args.line_width,
+        include_line: args.include_line,
         align_segments: args.align_segments,
         highlight_instance: args.highlight_instance,
         dry_run: args.dry_run,
+        extract_json: args.extract_json,
         source_name,
     };
 

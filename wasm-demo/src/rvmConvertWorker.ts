@@ -21,6 +21,7 @@ interface OptsDTO {
   mode: number;
   level: number;
   tolerance: number;
+  includeLine: boolean;
   lineWidth: number;
   removeEmpty: boolean;
   highlight: boolean;
@@ -65,6 +66,7 @@ function buildOptions(o: OptsDTO): Options {
   opt.mode = o.mode;
   opt.level = o.level;
   opt.tolerance = o.tolerance;
+  opt.include_line = o.includeLine;
   opt.line_width = o.lineWidth;
   opt.remove_empty = o.removeEmpty;
   opt.highlight_instance = o.highlight;

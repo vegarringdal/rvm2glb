@@ -1239,15 +1239,15 @@ mod line_tests {
         assert_eq!(t.vertices_n, 8, "2 plates * 4 corners");
         assert_eq!(t.triangles_n, 4, "2 plates * 2 triangles");
         assert_eq!(t.indices.len(), 12);
-        // Every vertex sits at one of the two endpoints along local X.
+        // Every vertex sits at one of the two endpoints along local Z.
         for v in t.vertices.chunks_exact(3) {
-            assert!(v[0] == 0.0 || v[0] == 2.0);
+            assert!(v[2] == 0.0 || v[2] == 2.0);
         }
-        // Plate 1 lies in the X-Y plane (z==0), plate 2 in the X-Z plane (y==0).
+        // Plate 1 lies in the Z-X plane (y==0), plate 2 in the Z-Y plane (x==0).
         let plate1 = &t.vertices[0..12];
         let plate2 = &t.vertices[12..24];
-        assert!(plate1.chunks_exact(3).all(|v| v[2] == 0.0));
-        assert!(plate2.chunks_exact(3).all(|v| v[1] == 0.0));
+        assert!(plate1.chunks_exact(3).all(|v| v[1] == 0.0));
+        assert!(plate2.chunks_exact(3).all(|v| v[0] == 0.0));
     }
 
     #[test]
@@ -1257,25 +1257,32 @@ mod line_tests {
 }
 
 /// Build a thin "+" cross for an RVM Line: two perpendicular quads (plates) of
-/// half-width `hw`, each spanning the local X-axis segment `a..b`. Plate 1 lies in
-/// the local X-Y plane, plate 2 in the X-Z plane, so from any view at least one
+/// half-width `hw`, each spanning the local **Z**-axis segment `a..b`. Plate 1 lies in
+/// the local Z-X plane, plate 2 in the Z-Y plane, so from any view at least one
 /// plate presents face-on — giving the otherwise zero-area line clickable surface.
 /// Returns None for a zero-length line (a == b), which has no selectable area.
+///
+/// The line runs along local **Z**, not local X: RVM stores a structural member's
+/// matrix with the member's length on its local Z axis (the GENSEC extrusion axis),
+/// and the Line is that member's centerline. Building along X (as rvmparser-master's
+/// export does) drops the centreline 90° off the member — two parallel girders then
+/// collapse into one collinear line. Verified against the girder facet meshes in
+/// `file4.rvm`: the member spans 4.45 m along world X, exactly matching `b - a`.
 fn line_cross(a: f32, b: f32, hw: f32) -> Option<Triangulation> {
     if (a - b).abs() < 1e-6 {
         return None;
     }
     let mut verts: Vec<f32> = Vec::with_capacity(8 * 3);
-    // Plate 1 — X-Y plane (spans Y = ±hw).
-    push_vertex(&mut verts, a, -hw, 0.0);
-    push_vertex(&mut verts, b, -hw, 0.0);
-    push_vertex(&mut verts, b, hw, 0.0);
-    push_vertex(&mut verts, a, hw, 0.0);
-    // Plate 2 — X-Z plane (spans Z = ±hw).
-    push_vertex(&mut verts, a, 0.0, -hw);
-    push_vertex(&mut verts, b, 0.0, -hw);
-    push_vertex(&mut verts, b, 0.0, hw);
-    push_vertex(&mut verts, a, 0.0, hw);
+    // Plate 1 — Z-X plane (spans X = ±hw).
+    push_vertex(&mut verts, -hw, 0.0, a);
+    push_vertex(&mut verts, -hw, 0.0, b);
+    push_vertex(&mut verts, hw, 0.0, b);
+    push_vertex(&mut verts, hw, 0.0, a);
+    // Plate 2 — Z-Y plane (spans Y = ±hw).
+    push_vertex(&mut verts, 0.0, -hw, a);
+    push_vertex(&mut verts, 0.0, -hw, b);
+    push_vertex(&mut verts, 0.0, hw, b);
+    push_vertex(&mut verts, 0.0, hw, a);
 
     let mut indices: Vec<u32> = Vec::with_capacity(12);
     for plate in 0..2u32 {
@@ -1362,13 +1369,25 @@ pub fn tessellate(
         }
         GeometryKind::FacetGroup => factory.facet_group(geo),
         // RVM has no native line geometry; draw a thin "+" cross of two quads swept
-        // along the local X-axis segment (a,0,0)->(b,0,0) so the line is selectable.
+        // along the local Z-axis segment so the line is selectable. The segment is
+        // *centred on the matrix origin* (RVM places a member's matrix at the member
+        // centre, with the Line as its centreline), so we draw ±(b-a)/2 rather than
+        // a..b — otherwise the centreline overhangs one end and misses the other.
+        // `line_width` is a world-space size, but the cross is built in local space and
+        // then scaled by the primitive's matrix (which often carries a mm→m unit scale).
+        // Pre-divide by that scale so the rendered width actually equals `line_width`.
         GeometryKind::Line => {
             let (a, b) = match &geo.shape {
                 GeometryShape::Line { a, b } => (*a, *b),
                 _ => return None,
             };
-            line_cross(a, b, 0.5 * line_width).unwrap_or_default()
+            let hw = if scale > 0.0 {
+                0.5 * line_width / scale
+            } else {
+                0.5 * line_width
+            };
+            let half = 0.5 * (b - a);
+            line_cross(-half, half, hw).unwrap_or_default()
         }
     };
 

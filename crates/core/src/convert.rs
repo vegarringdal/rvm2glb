@@ -28,12 +28,20 @@ pub struct ConvertOptions {
     pub mode: OutputMode,
     /// Width of the "+" cross drawn for RVM Line primitives.
     pub line_width: f32,
+    /// Include RVM Line primitives in the output. Off by default: lines are numerous
+    /// and add visual noise. When off they are skipped at parse time (every path).
+    pub include_line: bool,
     /// Round circle tessellation up to a multiple of 4 segments.
     pub align_segments: bool,
     /// Instanced debug colouring (shared shapes yellow, one-offs grey).
     pub highlight_instance: bool,
     /// Parse only; do not open any output.
     pub dry_run: bool,
+    /// Extract the RVM structure as JSON instead of tessellating to GLB. Emits one
+    /// `<site>.json` per root (full tree: hierarchy + per-primitive kind/type/params/
+    /// matrix, FacetGroups reduced to counts) plus a `base.json` index. Takes
+    /// precedence over `mode`; honours `level` for the per-site split and `dry_run`.
+    pub extract_json: bool,
     /// Original input name recorded in `status_file.json` (the source RVM basename).
     pub source_name: String,
 }
@@ -49,10 +57,12 @@ impl Default for ConvertOptions {
             meshopt_target_error: 0.0,
             tolerance: 0.01,
             mode: OutputMode::Merged,
-            line_width: 0.05,
+            line_width: 0.005,
+            include_line: false,
             align_segments: false,
             highlight_instance: false,
             dry_run: false,
+            extract_json: false,
             source_name: String::new(),
         }
     }

@@ -6,6 +6,7 @@ export interface ConvertOpts {
   mode: number; // 0 merged, 1 instanced, 2 standard
   level: number;
   tolerance: number;
+  includeLine: boolean;
   lineWidth: number;
   removeEmpty: boolean;
   highlight: boolean;
