@@ -1207,6 +1207,31 @@ impl TriangulationFactory {
                 continue; // fewer than 3 distinct points → no area
             }
 
+            // Reject zero-area / collinear contours via Newell's normal (its magnitude
+            // is 2×area). A degenerate (arealess) contour is the root cause of the
+            // sweep's dangling-edge / INVALID-index crashes — gating it here keeps
+            // libtess2 from ever building that corrupt state. Threshold is relative to
+            // the contour's own extent so it scales with model units.
+            let pts = centred.len() / 3;
+            let mut nx = 0.0;
+            let mut ny = 0.0;
+            let mut nz = 0.0;
+            let mut ext = 0.0_f64;
+            for i in 0..pts {
+                let a = &centred[i * 3..i * 3 + 3];
+                let b = &centred[((i + 1) % pts) * 3..((i + 1) % pts) * 3 + 3];
+                nx += (a[1] - b[1]) * (a[2] + b[2]);
+                ny += (a[2] - b[2]) * (a[0] + b[0]);
+                nz += (a[0] - b[0]) * (a[1] + b[1]);
+                ext = ext.max(a[0].abs()).max(a[1].abs()).max(a[2].abs());
+            }
+            let area2 = (nx * nx + ny * ny + nz * nz).sqrt();
+            // Areal scale ~ ext²; require the contour's area to be a non-trivial
+            // fraction of it (1e-12 of ext² ≈ floating-point noise floor).
+            if area2 <= 1e-12 * ext * ext {
+                continue;
+            }
+
             tess.add_contour(3, &centred);
             any_data = true;
         }

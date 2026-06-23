@@ -1267,6 +1267,12 @@ impl Tessellator {
         let mut e = e_first;
         let mut edge_iter = 0usize;
         loop {
+            // `e` (or a previous edge's `onext`) can be INVALID/dangling after a
+            // degenerate edge was deleted — indexing `edges[e]` with the INVALID
+            // sentinel (u32::MAX) would panic. Bail out of the ring walk cleanly.
+            if e == INVALID || (e as usize) >= self.mesh.as_ref().unwrap().edges.len() {
+                break;
+            }
             // Right-going invariant + duplicate-pair guard.  Either
             // condition means the edge isn't a fresh right-going
             // edge of the event vertex and must be skipped.
