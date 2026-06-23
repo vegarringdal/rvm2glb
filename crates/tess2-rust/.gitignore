@@ -1,0 +1,12 @@
+/target
+demo_test*
+/demo/public/pkg
+/demo/public/dist
+/demo/dist
+/demo/node_modules
+bun.lockb
+Cargo.lock
+trace_output*.txt
+/cpp_reference/
+tools/LionReferenceGen/obj/
+tools/LionReferenceGen/bin/

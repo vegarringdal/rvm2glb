@@ -3,6 +3,17 @@ resolver = "2"
 members = ["crates/core", "crates/cli", "crates/capi", "crates/wasm"]
 # wasm builds for wasm32 only; keep it out of native `cargo build`/`test` defaults.
 default-members = ["crates/core", "crates/cli", "crates/capi"]
+# the vendored tess2 fork is pulled in via [patch] below, not as a member, so
+# `cargo fmt/test --all` leave the upstream code's formatting/tests alone.
+exclude = ["crates/tess2-rust"]
+
+# Use our vendored, fail-soft fork of tess2-rust instead of the crates.io build: a
+# degenerate polygon contour makes upstream's sweep `unwrap()` a freed region and
+# panic. On native that's catchable, but wasm is panic=abort (no unwinding) so it
+# kills the whole module. The fork flags the bad state and returns "tessellation
+# failed" (face skipped) instead. See crates/tess2-rust/src/tess/mod.rs.
+[patch.crates-io]
+tess2-rust = { path = "crates/tess2-rust" }
 
 [workspace.package]
 version = "0.2.0"

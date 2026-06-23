@@ -3,7 +3,7 @@
 // back. Streaming (OPFS) is the only path. Modelled on step2glb's stepConvert.ts.
 
 export interface ConvertOpts {
-  mode: number; // 0 merged, 1 instanced, 2 standard
+  mode: number; // 0 merged, 1 instanced, 2 standard, 3 gpu-instanced
   level: number;
   tolerance: number;
   includeLine: boolean;

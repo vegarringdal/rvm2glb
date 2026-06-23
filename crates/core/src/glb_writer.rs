@@ -1,7 +1,9 @@
-//! GLB (binary glTF 2.0) serialiser for the three output modes: [`GlbWriter::build`]
+//! GLB (binary glTF 2.0) serialiser for the four output modes: [`GlbWriter::build`]
 //! (merged — one mesh per colour + web3d `extras`), [`GlbWriter::build_instanced`]
-//! (shared mesh per shape-key + native node tree), and [`GlbWriter::build_standard`]
-//! (one mesh per component + native node tree). Shared helpers do the precision weld,
+//! (shared mesh per shape-key + native node tree), [`GlbWriter::build_gpu_instanced`]
+//! (shared mesh + `EXT_mesh_gpu_instancing` per-instance TRS, flattened), and
+//! [`GlbWriter::build_standard`] (one mesh per component + native node tree). Shared
+//! helpers do the precision weld,
 //! optional meshopt simplify + vertex-cache pass (feature `optimize`), degenerate-triangle
 //! cull, vertex compaction, Z-up→Y-up rotation, and chunk framing.
 
@@ -760,6 +762,195 @@ impl GlbWriter {
         (glb, global_bbox)
     }
 
+    /// Build GLB bytes for one "root" using **GPU instancing** (`EXT_mesh_gpu_instancing`).
+    /// Like `build_instanced` each unique `shape_key` is triangulated once and shared as a
+    /// mesh per (shape, colour); but instead of one glTF node per occurrence, all
+    /// occurrences of a mesh collapse into a **single** node whose `EXT_mesh_gpu_instancing`
+    /// extension carries per-instance `TRANSLATION`/`ROTATION`/`SCALE` accessors. Far fewer
+    /// nodes + GPU-friendly, at the cost of flattening the RVM component-node tree (the
+    /// extension takes TRS, not arbitrary matrices — RVM transforms are rigid + uniform
+    /// scale, so the decomposition is exact; reflections fold into a negative scale axis).
+    /// The extension is listed in `extensionsUsed` *and* `extensionsRequired`.
+    pub fn build_gpu_instanced(
+        nodes: &HashMap<u32, MetaNode>,
+        tolerance: f32,
+        line_width: f32,
+        align_segments: bool,
+        remove_empty: bool,
+        cleanup: &Cleanup,
+    ) -> (Vec<u8>, BBox3) {
+        let mut bin: Vec<u8> = Vec::new();
+        let mut buffer_views: Vec<Value> = Vec::new();
+        let mut accessors: Vec<Value> = Vec::new();
+        let mut materials: Vec<Value> = Vec::new();
+        let mut meshes: Vec<Value> = Vec::new();
+        let mut global_bbox = BBox3::default();
+
+        let mut sorted_ids: Vec<u32> = nodes.keys().copied().collect();
+        sorted_ids.sort();
+        let sorted_ids = if remove_empty {
+            nodes_with_geometry(nodes, &sorted_ids)
+        } else {
+            sorted_ids
+        };
+
+        // Per shape: its shared local geometry. Per (shape, colour): the mesh index and
+        // the list of occurrence world transforms that will become instances.
+        let mut shape_geo: HashMap<u64, ShapeGeo> = HashMap::new();
+        let mut mat_for_color: HashMap<u32, usize> = HashMap::new();
+        // (shape_key, colour) -> (mesh_index, ShapeGeo aabb, Vec<world_transform>)
+        let mut groups: HashMap<(u64, u32), (usize, [f32; 3], [f32; 3], Vec<Mat3x4f>)> =
+            HashMap::new();
+        // Preserve first-seen order so output is deterministic.
+        let mut group_order: Vec<(u64, u32)> = Vec::new();
+
+        for id in &sorted_ids {
+            let node = nodes.get(id).unwrap();
+            let color = node.color_with_alpha;
+            for prim in &node.primitives {
+                let key = prim.shape_key;
+                if !shape_geo.contains_key(&key) {
+                    match build_shape_geo(
+                        &prim.shape,
+                        tolerance,
+                        line_width,
+                        prim.world_transform.get_scale(),
+                        align_segments,
+                        cleanup,
+                        &mut bin,
+                        &mut buffer_views,
+                        &mut accessors,
+                    ) {
+                        Some(sg) => {
+                            shape_geo.insert(key, sg);
+                        }
+                        None => continue,
+                    }
+                }
+                let sg = shape_geo.get(&key).unwrap();
+                let (pos_acc, idx_acc, sg_min, sg_max) =
+                    (sg.pos_acc, sg.idx_acc, sg.aabb_min, sg.aabb_max);
+
+                let mat_idx = match mat_for_color.get(&color) {
+                    Some(&m) => m,
+                    None => {
+                        materials.push(material_json(color));
+                        let m = materials.len() - 1;
+                        mat_for_color.insert(color, m);
+                        m
+                    }
+                };
+
+                let entry = groups.entry((key, color)).or_insert_with(|| {
+                    meshes.push(json!({
+                        "primitives": [{
+                            "attributes": { "POSITION": pos_acc },
+                            "indices": idx_acc,
+                            "material": mat_idx,
+                            "mode": 4
+                        }]
+                    }));
+                    group_order.push((key, color));
+                    (meshes.len() - 1, sg_min, sg_max, Vec::new())
+                });
+                entry.3.push(prim.world_transform);
+            }
+        }
+
+        // One node per (shape, colour) group, carrying its instances via the extension.
+        let mut gltf_nodes: Vec<Value> = Vec::with_capacity(group_order.len());
+        let mut scene_nodes: Vec<u32> = Vec::new();
+        let mut total_instances = 0usize;
+        for gk in &group_order {
+            let (mesh_idx, sg_min, sg_max, transforms) = groups.get(gk).unwrap();
+            let n = transforms.len();
+            total_instances += n;
+
+            let mut trans: Vec<f32> = Vec::with_capacity(n * 3);
+            let mut rot: Vec<f32> = Vec::with_capacity(n * 4);
+            let mut scl: Vec<f32> = Vec::with_capacity(n * 3);
+            for wt in transforms {
+                let m = node_matrix_zup_to_yup(wt);
+                let (t, q, s) = decompose_trs(&m);
+                trans.extend_from_slice(&t);
+                rot.extend_from_slice(&q);
+                scl.extend_from_slice(&s);
+
+                // Expand global bbox from the 8 transformed corners of the local AABB.
+                for &cx in &[sg_min[0], sg_max[0]] {
+                    for &cy in &[sg_min[1], sg_max[1]] {
+                        for &cz in &[sg_min[2], sg_max[2]] {
+                            let (x, y, z) = apply_matrix(&m, cx, cy, cz);
+                            update_bbox(&mut global_bbox, x, y, z, x, y, z);
+                        }
+                    }
+                }
+            }
+            let t_acc = push_instance_accessor(
+                &mut bin,
+                &mut buffer_views,
+                &mut accessors,
+                &trans,
+                3,
+                n as u64,
+            );
+            let r_acc = push_instance_accessor(
+                &mut bin,
+                &mut buffer_views,
+                &mut accessors,
+                &rot,
+                4,
+                n as u64,
+            );
+            let s_acc = push_instance_accessor(
+                &mut bin,
+                &mut buffer_views,
+                &mut accessors,
+                &scl,
+                3,
+                n as u64,
+            );
+
+            let node_idx = gltf_nodes.len() as u32;
+            gltf_nodes.push(json!({
+                "mesh": mesh_idx,
+                "extensions": {
+                    "EXT_mesh_gpu_instancing": {
+                        "attributes": { "TRANSLATION": t_acc, "ROTATION": r_acc, "SCALE": s_acc }
+                    }
+                }
+            }));
+            scene_nodes.push(node_idx);
+        }
+
+        println!(
+            "GPU-instanced: {} unique shapes, {} instances, {} meshes, {} nodes",
+            shape_geo.len(),
+            total_instances,
+            meshes.len(),
+            gltf_nodes.len()
+        );
+
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+        let gltf_json = json!({
+            "asset": { "version": "2.0", "generator": "rvm2glb" },
+            "extensionsUsed": ["EXT_mesh_gpu_instancing"],
+            "extensionsRequired": ["EXT_mesh_gpu_instancing"],
+            "scene": 0,
+            "scenes": [{ "nodes": scene_nodes }],
+            "nodes": gltf_nodes,
+            "meshes": meshes,
+            "materials": materials,
+            "accessors": accessors,
+            "bufferViews": buffer_views,
+            "buffers": [{ "byteLength": bin.len() }]
+        });
+        let glb = frame_glb(gltf_json.to_string().as_bytes(), &bin);
+        (glb, global_bbox)
+    }
+
     /// Build GLB bytes for one "root" in STANDARD mode: neither merged nor instanced.
     /// Emits the native glTF node tree mirroring the RVM hierarchy — one node per RVM
     /// node (container *and* leaf), wired parent→`children`, with a mesh on the nodes
@@ -1163,6 +1354,116 @@ fn apply_matrix(m: &[f64; 16], x: f32, y: f32, z: f32) -> (f32, f32, f32) {
     let py = m[1] * x + m[5] * y + m[9] * z + m[13];
     let pz = m[2] * x + m[6] * y + m[10] * z + m[14];
     (px as f32, py as f32, pz as f32)
+}
+
+/// Decompose a column-major 4×4 affine matrix into translation, rotation (quaternion
+/// `xyzw`) and scale, for `EXT_mesh_gpu_instancing`'s TRS attributes. RVM transforms are
+/// rigid + (uniform) scale, so this is exact; a reflection (det < 0) is folded into a
+/// negative X scale so the rotation stays proper. Quaternion via the standard
+/// trace/largest-diagonal method.
+fn decompose_trs(m: &[f64; 16]) -> ([f32; 3], [f32; 4], [f32; 3]) {
+    let c0 = [m[0], m[1], m[2]];
+    let c1 = [m[4], m[5], m[6]];
+    let c2 = [m[8], m[9], m[10]];
+    let len = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    let mut sx = len(c0);
+    let sy = len(c1);
+    let sz = len(c2);
+    let det = c0[0] * (c1[1] * c2[2] - c1[2] * c2[1]) - c1[0] * (c0[1] * c2[2] - c0[2] * c2[1])
+        + c2[0] * (c0[1] * c1[2] - c0[2] * c1[1]);
+    if det < 0.0 {
+        sx = -sx;
+    }
+    // Normalised rotation columns (guard against a zero-length / degenerate axis).
+    let inv = |s: f64| if s.abs() > 1e-12 { 1.0 / s } else { 0.0 };
+    let (ix, iy, iz) = (inv(sx), inv(sy), inv(sz));
+    // r(row, col): rotation matrix entries.
+    let r00 = c0[0] * ix;
+    let r10 = c0[1] * ix;
+    let r20 = c0[2] * ix;
+    let r01 = c1[0] * iy;
+    let r11 = c1[1] * iy;
+    let r21 = c1[2] * iy;
+    let r02 = c2[0] * iz;
+    let r12 = c2[1] * iz;
+    let r22 = c2[2] * iz;
+
+    let trace = r00 + r11 + r22;
+    let (qx, qy, qz, qw);
+    if trace > 0.0 {
+        let s = 0.5 / (trace + 1.0).sqrt();
+        qw = 0.25 / s;
+        qx = (r21 - r12) * s;
+        qy = (r02 - r20) * s;
+        qz = (r10 - r01) * s;
+    } else if r00 > r11 && r00 > r22 {
+        let s = 2.0 * (1.0 + r00 - r11 - r22).sqrt();
+        qw = (r21 - r12) / s;
+        qx = 0.25 * s;
+        qy = (r01 + r10) / s;
+        qz = (r02 + r20) / s;
+    } else if r11 > r22 {
+        let s = 2.0 * (1.0 + r11 - r00 - r22).sqrt();
+        qw = (r02 - r20) / s;
+        qx = (r01 + r10) / s;
+        qy = 0.25 * s;
+        qz = (r12 + r21) / s;
+    } else {
+        let s = 2.0 * (1.0 + r22 - r00 - r11).sqrt();
+        qw = (r10 - r01) / s;
+        qx = (r02 + r20) / s;
+        qy = (r12 + r21) / s;
+        qz = 0.25 * s;
+    }
+    // Normalise the quaternion (cheap insurance against accumulated fp error).
+    let qn = (qx * qx + qy * qy + qz * qz + qw * qw).sqrt();
+    let qi = if qn > 1e-12 { 1.0 / qn } else { 0.0 };
+    (
+        [m[12] as f32, m[13] as f32, m[14] as f32],
+        [
+            (qx * qi) as f32,
+            (qy * qi) as f32,
+            (qz * qi) as f32,
+            (qw * qi) as f32,
+        ],
+        [sx as f32, sy as f32, sz as f32],
+    )
+}
+
+/// Append a tightly-packed f32 instance attribute (`comp` components × `count` items) to
+/// `bin` and emit its bufferView + accessor (no `target`, per the GPU-instancing spec).
+/// Returns the accessor index.
+fn push_instance_accessor(
+    bin: &mut Vec<u8>,
+    buffer_views: &mut Vec<Value>,
+    accessors: &mut Vec<Value>,
+    data: &[f32],
+    comp: usize,
+    count: u64,
+) -> usize {
+    while bin.len() % 4 != 0 {
+        bin.push(0);
+    }
+    let byte_offset = bin.len();
+    for &v in data {
+        bin.extend_from_slice(&v.to_le_bytes());
+    }
+    let bv = buffer_views.len();
+    buffer_views.push(json!({
+        "buffer": 0,
+        "byteOffset": byte_offset,
+        "byteLength": data.len() * 4
+    }));
+    let acc = accessors.len();
+    let ty = if comp == 4 { "VEC4" } else { "VEC3" };
+    accessors.push(json!({
+        "bufferView": bv,
+        "byteOffset": 0,
+        "componentType": 5126, // FLOAT
+        "count": count,
+        "type": ty
+    }));
+    acc
 }
 
 /// PBR material JSON from a packed `0xAARRGGBB` colour (shared by both writers).

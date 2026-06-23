@@ -7,7 +7,7 @@
     <!-- <model-viewer> renders the resulting GLB without any extra build step -->
     <script
       type="module"
-      src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"
+      src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.3.1/model-viewer.min.js"
     ></script>
     <style>
       :root {
@@ -193,7 +193,8 @@
               <span class="field-label">Mode</span>
               <select id="mode">
                 <option value="0" selected>merged — one mesh per colour</option>
-                <option value="1">instanced — shared meshes</option>
+                <option value="1">instanced — shared meshes (node per occurrence)</option>
+                <option value="3">gpu-instanced — EXT_mesh_gpu_instancing</option>
                 <option value="2">standard — one mesh per component</option>
               </select>
               <span class="hint">merged bakes geometry per colour (smallest, web3d extras); instanced shares meshes; standard is the plain per-component node tree.</span>

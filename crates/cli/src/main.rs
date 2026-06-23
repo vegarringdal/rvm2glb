@@ -11,6 +11,9 @@ enum Mode {
     Merged,
     /// Node-per-instance: one mesh per unique shape, one node per occurrence.
     Instanced,
+    /// GPU instancing: one node per shared mesh via `EXT_mesh_gpu_instancing` (per-instance
+    /// TRS). Compact + GPU-friendly; flattens the RVM node tree.
+    GpuInstanced,
     /// One mesh + node per component, no merge and no instancing (plain glTF).
     Standard,
 }
@@ -20,6 +23,7 @@ impl From<Mode> for OutputMode {
         match m {
             Mode::Merged => OutputMode::Merged,
             Mode::Instanced => OutputMode::Instanced,
+            Mode::GpuInstanced => OutputMode::GpuInstanced,
             Mode::Standard => OutputMode::Standard,
         }
     }

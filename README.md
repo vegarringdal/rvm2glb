@@ -9,27 +9,36 @@ It is a port/evolution of a C++ tool (itself derived from [rvm_parser_glb](https
 > Atm only tested on very simple rvm files, so might need some patches before it stable
 
 It is a Cargo **workspace**: a platform-agnostic conversion engine (`rvm2glb-core`)
-driven by a CLI, a C ABI, and a WebAssembly shell with an in-browser demo — see
+driven by a CLI, a C ABI, and a WebAssembly shell with an in-browser demo \u2014 see
 [Crates](#crates) below.
 
-**▶ Live demo: <https://vegarringdal.github.io/rvm2glb/>** — converts RVM → GLB entirely
+**\u25b6 Live demo: <https://vegarringdal.github.io/rvm2glb/>** \u2014 converts RVM \u2192 GLB entirely
 in your browser (Web Worker + OPFS), nothing uploaded. Auto-deployed from `main` by
 [`.github/workflows/pages.yml`](.github/workflows/pages.yml).
 
-Three output modes (`--mode`):
+Four output modes (`--mode`):
 
-- **`merged`** (default) — one merged mesh per unique colour, geometry baked to
+- **`merged`** (default) \u2014 one merged mesh per unique colour, geometry baked to
   world space. Smallest output; per-component identity is kept out-of-band in
   scene `extras` (`id_hierarchy` + `draw_ranges`) for treeview + selection.
-- **`instanced`** — repeated shapes are detected and each unique shape is
+- **`instanced`** \u2014 repeated shapes are detected and each unique shape is
   triangulated once. Emits the **native glTF node tree** (RVM hierarchy) with each
-  occurrence as a child node referencing the shared mesh with its own `matrix` — plain
+  occurrence as a child node referencing the shared mesh with its own `matrix` \u2014 plain
   glTF mesh reuse, no extension, no web3d `extras`. Component nodes carry the RVM name.
-- **`standard`** — neither merged nor instanced: the **native glTF node tree**
-  mirroring the RVM hierarchy (one node per container/leaf, wired parent→children;
+- **`gpu-instanced`** \u2014 same shape dedup as `instanced`, but every occurrence of a
+  (shape, colour) mesh collapses into a **single** node using the
+  [`EXT_mesh_gpu_instancing`](https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Vendor/EXT_mesh_gpu_instancing/README.md)
+  extension, which carries per-instance `TRANSLATION`/`ROTATION`/`SCALE`. Far fewer
+  nodes and GPU-friendly draw-instancing, at the cost of flattening the RVM node tree
+  (the extension takes TRS, so each world transform is decomposed \u2014 RVM transforms are
+  rigid + uniform scale, so it's exact). The extension is listed in `extensionsUsed`
+  *and* `extensionsRequired`, so the viewer must support it (three.js / `<model-viewer>`
+  do). Example: on HA-PSUP this is 811 nodes vs `instanced`'s 13778, ~1.6 MB vs 2.7 MB.
+- **`standard`** \u2014 neither merged nor instanced: the **native glTF node tree**
+  mirroring the RVM hierarchy (one node per container/leaf, wired parent\u2192children;
   meshes on geometry nodes, world-space, no merge/dedup). The most faithful structure
   (and largest output); every node's `name` is the component's actual RVM name, so the
-  full model — geometry, colours, hierarchy — is readable back from it.
+  full model \u2014 geometry, colours, hierarchy \u2014 is readable back from it.
 
 RVM **Line** primitives (which the C++ tool skipped) are drawn as a thin "+" cross
 of two quads swept along the line, so they are selectable in a triangle viewer.
@@ -37,22 +46,22 @@ of two quads swept along the line, so they are selectable in a triangle viewer.
 Alternatively, `--extract-json` dumps the **RVM structure as JSON** instead of
 converting to GLB: one `<site>.json` per root (the full hierarchy, each primitive with
 its kind, type, opacity, transform matrix, and parametric params) plus a `base.json`
-index. FacetGroups are summarised to polygon/vertex counts. No tessellation — handy for
+index. FacetGroups are summarised to polygon/vertex counts. No tessellation \u2014 handy for
 inspecting or diffing model structure. See [Output](#output).
 
 ## Crates
 
 | Crate | Kind | What it is |
 |-------|------|-----------|
-| [`crates/core`](crates/core) — `rvm2glb-core` (lib name `rvm2glb`) | library | the whole engine: RVM parser, tessellation, instancing, the three output modes, the GLB writer, and the one-call `convert()` + I/O traits (`InputHandle` / `OutputHandle` / `OutputSink`). **Filesystem-free**, no CLI dependency. Feature `optimize` (default on) pulls in meshoptimizer (simplify + vertex-cache). |
-| [`crates/cli`](crates/cli) — `rvm2glb-cli` (bin `rvm2glb`) | binary | clap front end: file input + a directory output sink. |
-| [`crates/capi`](crates/capi) — `rvm2glb-capi` | cdylib + staticlib | C ABI (`rvm2glb_convert`) with streaming I/O + progress via C function pointers; header at [`crates/capi/include/rvm2glb.h`](crates/capi/include/rvm2glb.h). |
-| [`crates/wasm`](crates/wasm) — `rvm2glb-wasm` | cdylib (wasm) | `wasm-bindgen` shell: in-RAM + OPFS-streaming entry points. meshopt is **off by default** (opt-in `optimize` feature; needs `clang`). |
-| [`wasm-demo/`](wasm-demo) | TypeScript app | in-browser demo (Web Worker + OPFS + `<model-viewer>`) — **[live](https://vegarringdal.github.io/rvm2glb/)**. See its [README](wasm-demo/README.md). |
+| [`crates/core`](crates/core) \u2014 `rvm2glb-core` (lib name `rvm2glb`) | library | the whole engine: RVM parser, tessellation, instancing, the three output modes, the GLB writer, and the one-call `convert()` + I/O traits (`InputHandle` / `OutputHandle` / `OutputSink`). **Filesystem-free**, no CLI dependency. Feature `optimize` (default on) pulls in meshoptimizer (simplify + vertex-cache). |
+| [`crates/cli`](crates/cli) \u2014 `rvm2glb-cli` (bin `rvm2glb`) | binary | clap front end: file input + a directory output sink. |
+| [`crates/capi`](crates/capi) \u2014 `rvm2glb-capi` | cdylib + staticlib | C ABI (`rvm2glb_convert`) with streaming I/O + progress via C function pointers; header at [`crates/capi/include/rvm2glb.h`](crates/capi/include/rvm2glb.h). |
+| [`crates/wasm`](crates/wasm) \u2014 `rvm2glb-wasm` | cdylib (wasm) | `wasm-bindgen` shell: in-RAM + OPFS-streaming entry points. meshopt is **off by default** (opt-in `optimize` feature; needs `clang`). |
+| [`wasm-demo/`](wasm-demo) | TypeScript app | in-browser demo (Web Worker + OPFS + `<model-viewer>`) \u2014 **[live](https://vegarringdal.github.io/rvm2glb/)**. See its [README](wasm-demo/README.md). |
 
 The engine exposes `convert(input, sink, opts, progress) -> ConvertReport`: it reads the
 RVM in small chunks through an `InputHandle` and emits one GLB per site/level (plus a
-`status_file.json`) through an `OutputSink` — the same kernel backs the CLI (files), the
+`status_file.json`) through an `OutputSink` \u2014 the same kernel backs the CLI (files), the
 C ABI (callbacks), and wasm (OPFS). There is no temp file; one site is built in RAM,
 written, and dropped before the next.
 
@@ -91,7 +100,7 @@ rvm2glb --input <FILE> [OPTIONS]
 |--------|---------|-------------|
 | `-i, --input <FILE>` | *(required)* | RVM input file. |
 | `-o, --output <DIR>` | `./exports/` | Output folder (created if missing). |
-| `--mode <MODE>` | `merged` | `merged` (one mesh per colour), `instanced` (node per occurrence, shared meshes), or `standard` (one mesh per component, no merge/dedup). |
+| `--mode <MODE>` | `merged` | `merged` (one mesh per colour), `instanced` (node per occurrence, shared meshes), `gpu-instanced` (one node per shared mesh via `EXT_mesh_gpu_instancing`, per-instance TRS), or `standard` (one mesh per component, no merge/dedup). |
 | `-j, --extract-json` | `false` | Dump the RVM structure as JSON (`<site>.json` + `base.json`) instead of GLB. Overrides `--mode`; honours `--level`. |
 | `-x, --dry-run` | `false` | Parse only; do not write files. |
 | `-l, --level <N>` | `0` | Hierarchy depth at which to split into separate GLB files (`0` = site). |
@@ -99,16 +108,16 @@ rvm2glb --input <FILE> [OPTIONS]
 | `-d, --cleanup-position <0\|1>` | `1` | Weld coincident vertices. Disable with `-d 0`. |
 | `-p, --cleanup-precision <N>` | `3` | Decimal places for the vertex weld grid. |
 | `-m, --meshopt-threshold <F>` | `0.75` | meshopt simplify target (fraction of indices to keep; `1.0` disables). All three modes. |
-| `-e, --meshopt-target-error <F>` | `0.0` | meshopt simplify error budget. At `0` (default) only lossless collapses happen — raise it for real simplification. All three modes. |
+| `-e, --meshopt-target-error <F>` | `0.0` | meshopt simplify error budget. At `0` (default) only lossless collapses happen \u2014 raise it for real simplification. All three modes. |
 | `-t, --tolerance <F>` | `0.01` | Tessellation chord-height tolerance. |
 | `--line-width <W>` | `0.05` | Width (model units) of the "+" cross drawn for Line primitives. |
 | `--align-segments` | `off` | Round circle tessellation up to a multiple of 4 segments so adjacent primitives share boundary vertices (better flat-shading alignment, ~25% larger output). |
-| `--highlight-instance` | `off` | Instanced mode only: colour shapes shared by ≥2 occurrences yellow and one-offs grey, to visualise what got instanced. |
+| `--highlight-instance` | `off` | Instanced mode only: colour shapes shared by \u22652 occurrences yellow and one-offs grey, to visualise what got instanced. |
 
 ### Examples
 
 ```bash
-# Default merged conversion → ./exports/
+# Default merged conversion \u2192 ./exports/
 rvm2glb -i model.rvm
 
 # Instanced output (shared meshes + node-per-occurrence)
@@ -126,10 +135,10 @@ rvm2glb -i model.rvm --line-width 0.1
 # Split one GLB per second-level container (e.g. zone)
 rvm2glb -i model.rvm -l 1
 
-# Extract the RVM structure as JSON (no tessellation) → base.json + <site>.json
+# Extract the RVM structure as JSON (no tessellation) \u2192 base.json + <site>.json
 rvm2glb -i model.rvm --extract-json
 
-# Dry run — parse only
+# Dry run \u2014 parse only
 rvm2glb -i model.rvm -x
 ```
 
@@ -140,12 +149,14 @@ carry the web3d contract in `extras`: `asset.extras.web3dversion`, scene
 `id_hierarchy` (`{ node_id: [name, parent_id] }`) for the treeview, and
 `draw_ranges_node<N>` (`{ node_id: [start, count] }`) for per-component selection
 against the merged index buffers. **Instanced** GLBs are plain glTF with no such
-extras — selection is per glTF node via its `name` (= RVM node id).
+extras \u2014 selection is per glTF node via its `name` (= RVM node id). **GPU-instanced**
+GLBs flatten the tree to one node per shared mesh (no per-component names) and require
+the `EXT_mesh_gpu_instancing` extension in the viewer.
 
 `status_file.json` lists one entry per exported model with: `root_name`,
 `source_file_name` (the input RVM), `file_name`, `md5` (RVM stream hash),
 `glb_md5` (hash of the written GLB), `export_lvl` (the `--level` used), `parent`
-(container names above the root — empty at level 0), `parent_hash` (stable hash of
+(container names above the root \u2014 empty at level 0), `parent_hash` (stable hash of
 the parent path, folded into `file_name` when split deeper so same-named roots stay
 distinct), and the model bbox (`min_*`/`max_*`).
 
@@ -153,7 +164,7 @@ distinct), and the model bbox (`min_*`/`max_*`).
 
 With `--extract-json` the converter writes one `<site>.json` per root (named like the
 GLBs, with the same `parent_hash` suffix when split below site level) plus a `base.json`
-index — no tessellation, no GLB.
+index \u2014 no tessellation, no GLB.
 
 `base.json` holds the RVM `header`, `source_file_name`, `export_lvl`, a `sites` string
 array of root names, a `files` array (per-site `file_name`, `parent`/`parent_hash`, and
@@ -162,34 +173,32 @@ world bbox `min_*`/`max_*`), and `warnings`.
 Each `<site>.json` is the full node tree. Every node carries `id`, `name`, `opacity`,
 `color` (hex RGB), a `primitives` array, and a recursive `children` array. Each
 primitive records its `type` (`Primitive` / `Insulation` / `Obstruction`), `kind`
-(`Box`, `Cylinder`, `Snout`, …, `FacetGroup`), `opacity`, the raw 12-float column-major
+(`Box`, `Cylinder`, `Snout`, \u2026, `FacetGroup`), `opacity`, the raw 12-float column-major
 RVM `matrix`, and `params` (the parametric fields). **FacetGroups are reduced to
-`{ polygons, vertices }` counts** — the raw contour data is omitted, as it would dwarf
+`{ polygons, vertices }` counts** \u2014 the raw contour data is omitted, as it would dwarf
 everything else.
 
 ## Status & roadmap
 
 **Done**
 
-- All three output modes (merged / instanced / standard); RVM Line primitives drawn as
-  "+" crosses.
+- All four output modes (merged / instanced / gpu-instanced / standard); RVM Line
+  primitives drawn as "+" crosses.
 - Parse fidelity vs the C++ reference: connecting-tube recovery, COLR colour-override
   pre-scan, CNTB v4 offset realign, unknown-kind skip+warn, PRIM/INSU/OBST split,
-  opacity→alpha, meshopt `LockBorder` parity, degenerate-triangle cull + vertex
+  opacity\u2192alpha, meshopt `LockBorder` parity, degenerate-triangle cull + vertex
   compaction, and **interface cap removal** (shared faces between connected primitives
-  are dropped, à la cdyk/rvmparser). Default merged output is size-comparable to the C++ tool.
+  are dropped, � la cdyk/rvmparser). Default merged output is size-comparable to the C++ tool.
 - `core / cli / capi / wasm` workspace: filesystem-free engine behind
   `convert()` + I/O traits; C ABI; WebAssembly + in-browser demo (Worker + OPFS); GitHub
   Pages auto-deploy.
 - meshopt builds into wasm too (opt-in `optimize` feature, needs `clang`).
 - `--extract-json`: dump the RVM structure (hierarchy + parametric primitives, matrices,
-  colours) to JSON instead of GLB — `base.json` index + one `<site>.json` per root.
+  colours) to JSON instead of GLB \u2014 `base.json` index + one `<site>.json` per root.
 
 **Planned / ideas**
 
 - [ ] Browser smoke-test of the wasm demo across the sample set.
 - [ ] Optional **vertex-normal computation** for the GLB (currently POSITION-only).
-- [ ] `EXT_mesh_gpu_instancing` for the instanced mode (collapse per-occurrence node
-      matrices into TRS instance arrays — the main remaining size lever).
-- [ ] RVM **extract / split** (pull a subtree out into a new RVM), à la
+- [ ] RVM **extract / split** (pull a subtree out into a new RVM), � la
       [rvmsplitter](https://github.com/vegarringdal/rvmsplitter).

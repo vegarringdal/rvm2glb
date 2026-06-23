@@ -33,7 +33,8 @@ typedef void (*rvm2glb_close_fn)(void *user, uint64_t handle);
 typedef void (*rvm2glb_progress_fn)(void *user, uint32_t output_index, const char *name,
                                     uint32_t nodes);
 
-/* mode: 0 = merged, 1 = instanced, 2 = standard. source_name may be NULL. */
+/* mode: 0 = merged, 1 = instanced, 2 = standard, 3 = gpu-instanced
+ * (EXT_mesh_gpu_instancing). source_name may be NULL. */
 typedef struct {
   uint8_t level;
   int mode;

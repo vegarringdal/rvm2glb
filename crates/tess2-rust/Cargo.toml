@@ -1,0 +1,18 @@
+# Vendored fork of tess2-rust 1.1.4 (https://github.com/larsbrubaker/tess2-rust,
+# MIT). The only change from upstream is making the sweep's region accessors
+# fail soft (set an `aborted` flag + return a dummy) instead of `unwrap()`-ing a
+# freed region, so a degenerate contour can't panic. That matters on wasm, where
+# `panic = "abort"` means a panic aborts the whole module (no `catch_unwind`).
+# See src/tess/mod.rs (search "STEP2GLB PATCH").
+[package]
+name = "tess2-rust"
+version = "1.1.4"
+edition = "2021"
+rust-version = "1.70"
+description = "Pure Rust port of libtess2 (vendored fork: fail-soft region access)"
+license = "MIT"
+repository = "https://github.com/larsbrubaker/tess2-rust"
+
+[lib]
+name = "tess2_rust"
+path = "src/lib.rs"

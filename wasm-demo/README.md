@@ -1,16 +1,16 @@
 # rvm2glb wasm demo
 
-Converts RVM → GLB **entirely in the browser** — no upload. The conversion runs in a
+Converts RVM \u2192 GLB **entirely in the browser** \u2014 no upload. The conversion runs in a
 throwaway Web Worker; the input streams from OPFS (streaming mode) and outputs come back
 as downloadable blobs. Modelled on step2glb's wasm demo.
 
 > **meshopt is dropped in the browser build by default** (the wasm crate builds core
 > `--no-default-features`). At the default settings this is
-> geometrically identical to the native build — only vertex order differs.
+> geometrically identical to the native build \u2014 only vertex order differs.
 >
 > To compile meshopt *into* the wasm bundle (byte-parity with native), install `clang`
-> and run **`npm run build:wasm:opt`** (= `wasm-pack … -- --features optimize`). No WASI
-> SDK is needed — the `meshopt` crate ships freestanding `include_wasm32` headers, and the
+> and run **`npm run build:wasm:opt`** (= `wasm-pack \u2026 -- --features optimize`). No WASI
+> SDK is needed \u2014 the `meshopt` crate ships freestanding `include_wasm32` headers, and the
 > wasm crate supplies the `operator new`/`delete` shim. **Verified to link**; it adds only
 > ~32 KB to the release bundle.
 >
@@ -46,40 +46,40 @@ npm run build    # production build into dist/
 Pushing to `main` auto-builds and deploys this demo to
 **<https://vegarringdal.github.io/rvm2glb/>** via
 [`.github/workflows/pages.yml`](../.github/workflows/pages.yml). One-time setup: repo
-**Settings → Pages → Source = "GitHub Actions"**. The Pages base path is derived from the
+**Settings \u2192 Pages \u2192 Source = "GitHub Actions"**. The Pages base path is derived from the
 repo name, so a project site under `/<repo>/` works without edits. For a local
 deploy-preview: `npm run build:pages && npm run preview:pages`.
 
 ## Layout
 
 Modelled on step2glb: a top bar (brand + GitHub link + status), a **left** settings
-panel (file picker; mode merged/instanced/standard; split level; remove-empty; highlight;
-tolerance; line width; align-segments; weld + precision; meshopt threshold + error — note
+panel (file picker; mode merged/instanced/gpu-instanced/standard; split level; remove-empty; highlight;
+tolerance; line width; align-segments; weld + precision; meshopt threshold + error \u2014 note
 that with weld on you can't recompute good per-vertex normals afterwards), a centre
 **`<model-viewer>`**, and a **right** output-files panel
-— one row per produced GLB / `status_file.json` with **View** (loads it into the viewer)
+\u2014 one row per produced GLB / `status_file.json` with **View** (loads it into the viewer)
 and **Download** buttons. The footer has the source name + **Download all**, which
 bundles every output into one `.zip` (streamed/compressed off-thread via
-[fflate](https://github.com/101arrowz/fflate)) — a model can have 150+ sites, and
+[fflate](https://github.com/101arrowz/fflate)) \u2014 a model can have 150+ sites, and
 browsers block firing that many individual downloads.
 
 ## How it works
 
 **OPFS streaming is the only path.** The input is staged into OPFS on the main thread,
 then converted in a throwaway Worker that reads it through an OPFS **sync access handle**
-(worker-only) — so the whole file never sits in wasm memory.
+(worker-only) \u2014 so the whole file never sits in wasm memory.
 
-- **`src/rvmConvertWorker.ts`** — opens the input sync handle and drives
-  `convert_streaming(io, …)`. Each output site is buffered (the core writes one at a
-  time: open→write→close) and transferred back to the main thread; per-site progress is
+- **`src/rvmConvertWorker.ts`** \u2014 opens the input sync handle and drives
+  `convert_streaming(io, \u2026)`. Each output site is buffered (the core writes one at a
+  time: open\u2192write\u2192close) and transferred back to the main thread; per-site progress is
   posted as it goes.
-- **`src/rvmConvert.ts`** — main thread. Stages the input into OPFS, spawns the worker,
+- **`src/rvmConvert.ts`** \u2014 main thread. Stages the input into OPFS, spawns the worker,
   relays progress, collects the output blobs, cleans up.
-- **`src/main.ts`** — the UI: panels, options, the file list with View/Download, and the
+- **`src/main.ts`** \u2014 the UI: panels, options, the file list with View/Download, and the
   model-viewer wiring.
 
 > One RVM can produce several GLBs (one per site at level 0), so the right panel is a
-> list — multi-site files like `NodeHvLadderElec` show every site.
+> list \u2014 multi-site files like `NodeHvLadderElec` show every site.
 
 ## Status
 

@@ -148,6 +148,7 @@ pub unsafe extern "C" fn rvm2glb_convert(
         0 => rvm2glb::OutputMode::Merged,
         1 => rvm2glb::OutputMode::Instanced,
         2 => rvm2glb::OutputMode::Standard,
+        3 => rvm2glb::OutputMode::GpuInstanced,
         _ => return 1,
     };
     let source_name = if o.source_name.is_null() {

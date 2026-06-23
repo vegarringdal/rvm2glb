@@ -30,6 +30,9 @@ pub enum OutputMode {
     Merged,
     /// Node-per-instance with shared meshes (shape dedup); plain glTF.
     Instanced,
+    /// GPU instancing: one node per shared mesh with `EXT_mesh_gpu_instancing`
+    /// (per-instance TRS). Compact + GPU-friendly; flattens the RVM node tree.
+    GpuInstanced,
     /// One mesh + node per component, no merge, no dedup; plain glTF.
     Standard,
 }
@@ -137,6 +140,21 @@ const INSU: u32 = chunk_id(b"INSU");
 const COLR: u32 = chunk_id(b"COLR");
 const END_: u32 = chunk_id(b"END:");
 
+/// Reconstruct a full 64-bit absolute offset from RVM's 32-bit `next_abs` field. The
+/// format stores it as a bare u32, so on a file > 4 GB it only holds the low 32 bits of
+/// the next-sibling offset. We parse strictly forward, so the true target lies in
+/// `[header_start, header_start + 4 GB)`: take the high bits from `header_start` and bump
+/// by 4 GB if the low bits wrapped below it. (Assumes no single chunk is ≥ 4 GB, which
+/// holds for real RVM exports.) For files < 4 GB this is a no-op (returns `raw`).
+fn reconstruct_abs(header_start: u64, raw: u32) -> u64 {
+    let high = header_start & !0xFFFF_FFFF;
+    let mut abs = high | raw as u64;
+    if abs < header_start {
+        abs += 1u64 << 32;
+    }
+    abs
+}
+
 // ─── Parser ────────────────────────────────────────────────────────────────
 
 pub struct RvmParser {
@@ -157,12 +175,14 @@ pub struct RvmParser {
     extract_json: bool,
 
     // input stream (read in ≤buf-sized chunks via InputHandle::read_at)
+    // Offsets are u64, not usize: RVM files can exceed 4 GB and the wasm target is
+    // 32-bit (usize = u32), so a usize offset would truncate/overflow past 4 GB.
     input: Option<Box<dyn InputHandle>>,
-    pos: usize, // current byte position in file
-    file_len: usize,
-    buf: [u8; 1024],  // 1 KB read buffer (matches C++ p_buffer_size)
-    buf_start: usize, // file offset of buf[0]
-    buf_len: usize,   // valid bytes in buf
+    pos: u64, // current byte position in file
+    file_len: u64,
+    buf: [u8; 1024], // 1 KB read buffer (matches C++ p_buffer_size)
+    buf_start: u64,  // file offset of buf[0]
+    buf_len: usize,  // valid bytes in buf
     md5: Md5Context,
 
     // hierarchy state
@@ -255,7 +275,7 @@ impl RvmParser {
         // parse, so material indices referenced anywhere resolve to the right RGB.
         self.prescan_colors(input.as_ref())?;
 
-        self.file_len = input.size() as usize;
+        self.file_len = input.size();
         self.input = Some(input);
         self.pos = 0;
         self.buf_start = 0;
@@ -301,9 +321,10 @@ impl RvmParser {
     /// so a single forward pass would miss them. Scans the last 10 MB (or the whole
     /// file if smaller), matching the C++ window.
     fn prescan_colors(&mut self, input: &dyn InputHandle) -> anyhow::Result<()> {
-        let total = input.size() as usize;
+        let total = input.size();
         let window = total.min(10 * 1024 * 1024);
-        let base = (total - window) as u64;
+        let base = total - window;
+        let window = window as usize;
         let mut buf = vec![0u8; window];
         // read_at may be short — loop until the window is filled or the source ends.
         let mut got = 0usize;
@@ -329,18 +350,20 @@ impl RvmParser {
     // Ensure buf covers self.pos, refilling from the input if needed. read_at takes an
     // absolute offset, so PRIM/CNTE position jumps need no seek bookkeeping.
     fn fill_buf(&mut self) {
-        if self.pos >= self.buf_start + self.buf_len {
+        // Refill when pos is outside the buffered window — either past the end OR
+        // *before* the start. The backward case matters: a chunk-offset jump (or a
+        // wrapped offset on a >4 GB file) can move pos below buf_start, and without
+        // this `pos - buf_start` would underflow into a huge out-of-bounds index.
+        if self.pos < self.buf_start || self.pos >= self.buf_start + self.buf_len as u64 {
             let input = self.input.as_ref().expect("input not open");
             self.buf_start = self.pos;
-            self.buf_len = input
-                .read_at(self.pos as u64, &mut self.buf)
-                .expect("read failed");
+            self.buf_len = input.read_at(self.pos, &mut self.buf).expect("read failed");
         }
     }
 
     fn read_u8(&mut self) -> u8 {
         self.fill_buf();
-        let b = self.buf[self.pos - self.buf_start];
+        let b = self.buf[(self.pos - self.buf_start) as usize];
         self.pos += 1;
         self.md5.consume(&[b]);
         b
@@ -359,8 +382,11 @@ impl RvmParser {
     }
 
     fn read_string(&mut self) -> String {
-        let s_len = self.read_u32_be() as usize;
-        let byte_len = 4 * s_len;
+        let s_len = self.read_u32_be() as u64;
+        // Guard against a garbage length (e.g. after a misparse) reading past EOF:
+        // the string can't be longer than what remains in the file.
+        let max_words = self.file_len.saturating_sub(self.pos) / 4;
+        let byte_len = (4 * s_len.min(max_words)) as usize;
         let mut result = String::new();
         let mut read = 0usize;
         while read < byte_len {
@@ -381,7 +407,8 @@ impl RvmParser {
     // Read chunk header: 4 char-words (16 bytes) for name + next_abs(4) + unk(4) = 24 bytes total.
     // Returns (chunk_id, next_abs_byte_offset).
     // next_abs is the absolute byte offset in the file where the NEXT SIBLING chunk begins.
-    fn read_chunk_header(&mut self) -> (u32, usize) {
+    fn read_chunk_header(&mut self) -> (u32, u64) {
+        let header_start = self.pos;
         // 4 words encoding the chunk name; we only care about byte[3] of each word
         let mut name_bytes = [0u8; 4];
         for i in 0..4 {
@@ -394,9 +421,9 @@ impl RvmParser {
             | ((name_bytes[1] as u32) << 16)
             | ((name_bytes[2] as u32) << 8)
             | (name_bytes[3] as u32);
-        let next_abs = self.read_u32_be() as usize; // absolute byte offset to next sibling
-        let _unk = self.read_u32_be(); // version/unknown word
-        (cid, next_abs)
+        let raw = self.read_u32_be(); // low 32 bits of the next-sibling byte offset
+        let _unk = self.read_u32_be(); // version/unknown word (always 1 in practice)
+        (cid, reconstruct_abs(header_start, raw))
     }
 
     // ── Block parsers ─────────────────────────────────────────────────────
@@ -459,7 +486,7 @@ impl RvmParser {
         (name, material, opacity)
     }
 
-    fn parse_prim(&mut self, chunk_type: u32, next_abs: usize) {
+    fn parse_prim(&mut self, chunk_type: u32, next_abs: u64) {
         let _version = self.read_u32_be();
         let kind = self.read_u32_be();
 
@@ -576,7 +603,7 @@ impl RvmParser {
         self.pos = next_abs;
     }
 
-    fn parse_shape(&mut self, kind: u32, next_abs: usize) -> Option<GeometryShape> {
+    fn parse_shape(&mut self, kind: u32, next_abs: u64) -> Option<GeometryShape> {
         let shape = match kind {
             1 => GeometryShape::Pyramid {
                 bottom: [self.read_f32_be(), self.read_f32_be()],
@@ -910,6 +937,14 @@ impl RvmParser {
                 self.remove_empty,
                 &cleanup,
             ),
+            OutputMode::GpuInstanced => GlbWriter::build_gpu_instanced(
+                &self.nodes,
+                self.tolerance,
+                self.line_width,
+                self.align_segments,
+                self.remove_empty,
+                &cleanup,
+            ),
             OutputMode::Standard => {
                 GlbWriter::build_standard(&self.nodes, self.remove_empty, &cleanup)
             }
@@ -1105,6 +1140,21 @@ fn sanitize_filename(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconstruct_abs_handles_4gb_wrap() {
+        const G4: u64 = 1u64 << 32;
+        // Under 4 GB: identity (high bits zero, no wrap).
+        assert_eq!(reconstruct_abs(208, 308), 308);
+        assert_eq!(reconstruct_abs(0, 0xFFFF_FF00), 0xFFFF_FF00);
+        // Header just past 4 GB, target a bit further: low bits don't wrap.
+        assert_eq!(reconstruct_abs(G4 + 1000, 2000), G4 + 2000);
+        // Target crosses the 4 GB boundary just after the header: low bits wrap below
+        // the header's low bits, so we must add 4 GB to land in the next page.
+        assert_eq!(reconstruct_abs(G4 - 100, 50), G4 + 50);
+        // Deep into a 9 GB file (two pages up), forward within the page.
+        assert_eq!(reconstruct_abs(2 * G4 + 500, 9000), 2 * G4 + 9000);
+    }
 
     #[test]
     fn store_splits_insu_obst_with_opacity_alpha() {

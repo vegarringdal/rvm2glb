@@ -87,7 +87,7 @@ mod cxx_alloc {
     }
 }
 
-// ── Options (a JS class; mode: 0 merged, 1 instanced, 2 standard) ────────────
+// ── Options (a JS class; mode: 0 merged, 1 instanced, 2 standard, 3 gpu-instanced) ──
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
@@ -154,6 +154,7 @@ fn to_core(o: &Options, source_name: String) -> ConvertOptions {
         mode: match o.mode {
             1 => rvm2glb::OutputMode::Instanced,
             2 => rvm2glb::OutputMode::Standard,
+            3 => rvm2glb::OutputMode::GpuInstanced,
             _ => rvm2glb::OutputMode::Merged,
         },
         line_width: o.line_width,
