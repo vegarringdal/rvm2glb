@@ -1153,7 +1153,7 @@ impl TriangulationFactory {
     ) {
         use tess2_rust::{ElementType, TessellatorApi, WindingRule};
 
-        // Compute bbox centre for numerical stability \u2014 same as original C++
+        // Compute bbox centre for numerical stability — same as original C++
         let mut bbox = BBox3f::empty();
         for cont in &poly.contours {
             for i in 0..cont.vertices.len() / 3 {
@@ -1204,7 +1204,7 @@ impl TriangulationFactory {
                 }
             }
             if centred.len() < 9 {
-                continue; // fewer than 3 distinct points \u2192 no area
+                continue; // fewer than 3 distinct points → no area
             }
 
             tess.add_contour(3, &centred);
