@@ -1153,7 +1153,7 @@ impl TriangulationFactory {
     ) {
         use tess2_rust::{ElementType, TessellatorApi, WindingRule};
 
-        // Compute bbox centre for numerical stability — same as original C++
+        // Compute bbox centre for numerical stability \u2014 same as original C++
         let mut bbox = BBox3f::empty();
         for cont in &poly.contours {
             for i in 0..cont.vertices.len() / 3 {
@@ -1174,12 +1174,37 @@ impl TriangulationFactory {
             }
 
             // Centre vertices around bbox midpoint for numerical stability
-            // tess2-rust uses f64 (Real = f64) internally
+            // (tess2-rust uses f64 internally) and *clean* the contour before handing
+            // it to libtess2: drop non-finite points and consecutive duplicates
+            // (incl. the wrap-around). Degenerate input is the main trigger for the
+            // sweep's out-of-bounds / freed-region paths; cleaning here avoids them.
             let mut centred: Vec<f64> = Vec::with_capacity(n * 3);
             for i in 0..n {
-                centred.push(cont.vertices[i * 3] as f64 - mx);
-                centred.push(cont.vertices[i * 3 + 1] as f64 - my);
-                centred.push(cont.vertices[i * 3 + 2] as f64 - mz);
+                let p = [
+                    cont.vertices[i * 3] as f64 - mx,
+                    cont.vertices[i * 3 + 1] as f64 - my,
+                    cont.vertices[i * 3 + 2] as f64 - mz,
+                ];
+                if !p.iter().all(|c| c.is_finite()) {
+                    continue;
+                }
+                let dup = centred.len() >= 3
+                    && centred[centred.len() - 3] == p[0]
+                    && centred[centred.len() - 2] == p[1]
+                    && centred[centred.len() - 1] == p[2];
+                if !dup {
+                    centred.extend_from_slice(&p);
+                }
+            }
+            // Drop a wrap-around duplicate (last == first).
+            if centred.len() >= 6 {
+                let (f, l) = (&centred[0..3], &centred[centred.len() - 3..]);
+                if f == l {
+                    centred.truncate(centred.len() - 3);
+                }
+            }
+            if centred.len() < 9 {
+                continue; // fewer than 3 distinct points \u2192 no area
             }
 
             tess.add_contour(3, &centred);
