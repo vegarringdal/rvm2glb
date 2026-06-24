@@ -762,15 +762,23 @@ impl GlbWriter {
         (glb, global_bbox)
     }
 
-    /// Build GLB bytes for one "root" using **GPU instancing** (`EXT_mesh_gpu_instancing`).
-    /// Like `build_instanced` each unique `shape_key` is triangulated once and shared as a
-    /// mesh per (shape, colour); but instead of one glTF node per occurrence, all
-    /// occurrences of a mesh collapse into a **single** node whose `EXT_mesh_gpu_instancing`
-    /// extension carries per-instance `TRANSLATION`/`ROTATION`/`SCALE` accessors. Far fewer
-    /// nodes + GPU-friendly, at the cost of flattening the RVM component-node tree (the
-    /// extension takes TRS, not arbitrary matrices — RVM transforms are rigid + uniform
-    /// scale, so the decomposition is exact; reflections fold into a negative scale axis).
-    /// The extension is listed in `extensionsUsed` *and* `extensionsRequired`.
+    /// Build GLB bytes for one "root" using **GPU instancing** (`EXT_mesh_gpu_instancing`)
+    /// while keeping the **full named RVM tree** (like `build_standard`/`build_instanced`).
+    ///
+    /// One named glTF node per RVM node (containers *and* leaves), wired parent→`children`;
+    /// the geometry hangs underneath as **unnamed** child nodes (names live only on the
+    /// tree). A named node's own primitives are grouped by `shape_key`: parts that repeat
+    /// within that node collapse into a **single** `EXT_mesh_gpu_instancing` child carrying
+    /// per-instance `TRANSLATION`/`ROTATION`/`SCALE` accessors; a one-off part stays a plain
+    /// `{ mesh, matrix }` child (cheaper than a 1-instance extension). So a leaf "made of
+    /// many parts" gets several unnamed geometry children, and identity is the named parent
+    /// — no `extras` needed. Mesh/shape geometry is still deduped globally (each `shape_key`
+    /// triangulated once, one mesh per `(shape, colour)`); containers stay at identity so the
+    /// child carries the full world placement. The extension takes TRS, not arbitrary
+    /// matrices — RVM transforms are rigid + uniform scale, so the decomposition is exact;
+    /// reflections fold into a negative scale axis. `EXT_mesh_gpu_instancing` is listed in
+    /// `extensionsUsed`/`extensionsRequired` only when at least one EXT child is emitted
+    /// (otherwise the output is plain glTF, identical in shape to `instanced`).
     pub fn build_gpu_instanced(
         nodes: &HashMap<u32, MetaNode>,
         tolerance: f32,
@@ -788,25 +796,55 @@ impl GlbWriter {
 
         let mut sorted_ids: Vec<u32> = nodes.keys().copied().collect();
         sorted_ids.sort();
+        // Honour remove_empty (default): drop empty leaves / wholly-empty branches.
         let sorted_ids = if remove_empty {
             nodes_with_geometry(nodes, &sorted_ids)
         } else {
             sorted_ids
         };
 
-        // Per shape: its shared local geometry. Per (shape, colour): the mesh index and
-        // the list of occurrence world transforms that will become instances.
+        // One glTF node per RVM node (named tree), in sorted order; the geometry hangs
+        // underneath as extra unnamed child nodes appended after the named block.
+        let node_index: HashMap<u32, u32> = sorted_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i as u32))
+            .collect();
+        let k = sorted_ids.len() as u32; // index of the first geometry node
+
+        let name_of = |node: &MetaNode| {
+            if node.name.is_empty() {
+                node.id.to_string()
+            } else {
+                node.name.clone()
+            }
+        };
+
+        // Global dedup: each shape triangulated once, one material/mesh per colour/shape.
         let mut shape_geo: HashMap<u64, ShapeGeo> = HashMap::new();
         let mut mat_for_color: HashMap<u32, usize> = HashMap::new();
-        // (shape_key, colour) -> (mesh_index, ShapeGeo aabb, Vec<world_transform>)
-        let mut groups: HashMap<(u64, u32), (usize, [f32; 3], [f32; 3], Vec<Mat3x4f>)> =
-            HashMap::new();
-        // Preserve first-seen order so output is deterministic.
-        let mut group_order: Vec<(u64, u32)> = Vec::new();
+        let mut mesh_for: HashMap<(u64, u32), usize> = HashMap::new();
+
+        // Unnamed geometry nodes (plain {mesh,matrix} or EXT-instanced), grouped by their
+        // owning RVM node so they can be wired in as that node's children.
+        let mut geom_nodes: Vec<Value> = Vec::new();
+        let mut node_geoms: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut total_instances = 0usize;
+        let mut ext_groups = 0usize; // EXT children emitted (parts repeated within a node)
+        let mut used_ext = false;
 
         for id in &sorted_ids {
             let node = nodes.get(id).unwrap();
+            if node.primitives.is_empty() {
+                continue;
+            }
             let color = node.color_with_alpha;
+
+            // Group this named node's own primitives by shape. Colour is constant within a
+            // node (INSU/OBST split into their own MetaNodes), so the key is just shape_key.
+            let mut shape_order: Vec<u64> = Vec::new();
+            let mut by_shape: HashMap<u64, (usize, [f32; 3], [f32; 3], Vec<Mat3x4f>)> =
+                HashMap::new();
             for prim in &node.primitives {
                 let key = prim.shape_key;
                 if !shape_geo.contains_key(&key) {
@@ -841,92 +879,131 @@ impl GlbWriter {
                     }
                 };
 
-                let entry = groups.entry((key, color)).or_insert_with(|| {
-                    meshes.push(json!({
-                        "primitives": [{
-                            "attributes": { "POSITION": pos_acc },
-                            "indices": idx_acc,
-                            "material": mat_idx,
-                            "mode": 4
-                        }]
-                    }));
-                    group_order.push((key, color));
-                    (meshes.len() - 1, sg_min, sg_max, Vec::new())
+                // Mesh per (shape, colour) — shares the shape's accessors across all nodes.
+                let mesh_idx = match mesh_for.get(&(key, color)) {
+                    Some(&m) => m,
+                    None => {
+                        meshes.push(json!({
+                            "primitives": [{
+                                "attributes": { "POSITION": pos_acc },
+                                "indices": idx_acc,
+                                "material": mat_idx,
+                                "mode": 4
+                            }]
+                        }));
+                        let m = meshes.len() - 1;
+                        mesh_for.insert((key, color), m);
+                        m
+                    }
+                };
+
+                let entry = by_shape.entry(key).or_insert_with(|| {
+                    shape_order.push(key);
+                    (mesh_idx, sg_min, sg_max, Vec::new())
                 });
                 entry.3.push(prim.world_transform);
             }
-        }
 
-        // One node per (shape, colour) group, carrying its instances via the extension.
-        let mut gltf_nodes: Vec<Value> = Vec::with_capacity(group_order.len());
-        let mut scene_nodes: Vec<u32> = Vec::new();
-        let mut total_instances = 0usize;
-        for gk in &group_order {
-            let (mesh_idx, sg_min, sg_max, transforms) = groups.get(gk).unwrap();
-            let n = transforms.len();
-            total_instances += n;
+            // Emit one unnamed child per shape group, in first-seen order.
+            for key in &shape_order {
+                let (mesh_idx, sg_min, sg_max, transforms) = by_shape.get(key).unwrap();
+                let n = transforms.len();
+                total_instances += n;
+                let gltf_idx = k + geom_nodes.len() as u32;
 
-            let mut trans: Vec<f32> = Vec::with_capacity(n * 3);
-            let mut rot: Vec<f32> = Vec::with_capacity(n * 4);
-            let mut scl: Vec<f32> = Vec::with_capacity(n * 3);
-            for wt in transforms {
-                let m = node_matrix_zup_to_yup(wt);
-                let (t, q, s) = decompose_trs(&m);
-                trans.extend_from_slice(&t);
-                rot.extend_from_slice(&q);
-                scl.extend_from_slice(&s);
-
-                // Expand global bbox from the 8 transformed corners of the local AABB.
-                for &cx in &[sg_min[0], sg_max[0]] {
-                    for &cy in &[sg_min[1], sg_max[1]] {
-                        for &cz in &[sg_min[2], sg_max[2]] {
-                            let (x, y, z) = apply_matrix(&m, cx, cy, cz);
-                            update_bbox(&mut global_bbox, x, y, z, x, y, z);
+                if n == 1 {
+                    // One-off part: a plain unnamed mesh node carrying its world matrix.
+                    let m = node_matrix_zup_to_yup(&transforms[0]);
+                    expand_bbox_corners(&mut global_bbox, &m, sg_min, sg_max);
+                    geom_nodes.push(json!({ "mesh": mesh_idx, "matrix": m }));
+                } else {
+                    // Repeated part: collapse into one EXT_mesh_gpu_instancing node.
+                    let mut trans: Vec<f32> = Vec::with_capacity(n * 3);
+                    let mut rot: Vec<f32> = Vec::with_capacity(n * 4);
+                    let mut scl: Vec<f32> = Vec::with_capacity(n * 3);
+                    for wt in transforms {
+                        let m = node_matrix_zup_to_yup(wt);
+                        let (t, q, s) = decompose_trs(&m);
+                        trans.extend_from_slice(&t);
+                        rot.extend_from_slice(&q);
+                        scl.extend_from_slice(&s);
+                        expand_bbox_corners(&mut global_bbox, &m, sg_min, sg_max);
+                    }
+                    let t_acc = push_instance_accessor(
+                        &mut bin,
+                        &mut buffer_views,
+                        &mut accessors,
+                        &trans,
+                        3,
+                        n as u64,
+                    );
+                    let r_acc = push_instance_accessor(
+                        &mut bin,
+                        &mut buffer_views,
+                        &mut accessors,
+                        &rot,
+                        4,
+                        n as u64,
+                    );
+                    let s_acc = push_instance_accessor(
+                        &mut bin,
+                        &mut buffer_views,
+                        &mut accessors,
+                        &scl,
+                        3,
+                        n as u64,
+                    );
+                    geom_nodes.push(json!({
+                        "mesh": mesh_idx,
+                        "extensions": {
+                            "EXT_mesh_gpu_instancing": {
+                                "attributes": { "TRANSLATION": t_acc, "ROTATION": r_acc, "SCALE": s_acc }
+                            }
                         }
-                    }
+                    }));
+                    used_ext = true;
+                    ext_groups += 1;
                 }
+                node_geoms.entry(*id).or_default().push(gltf_idx);
             }
-            let t_acc = push_instance_accessor(
-                &mut bin,
-                &mut buffer_views,
-                &mut accessors,
-                &trans,
-                3,
-                n as u64,
-            );
-            let r_acc = push_instance_accessor(
-                &mut bin,
-                &mut buffer_views,
-                &mut accessors,
-                &rot,
-                4,
-                n as u64,
-            );
-            let s_acc = push_instance_accessor(
-                &mut bin,
-                &mut buffer_views,
-                &mut accessors,
-                &scl,
-                3,
-                n as u64,
-            );
-
-            let node_idx = gltf_nodes.len() as u32;
-            gltf_nodes.push(json!({
-                "mesh": mesh_idx,
-                "extensions": {
-                    "EXT_mesh_gpu_instancing": {
-                        "attributes": { "TRANSLATION": t_acc, "ROTATION": r_acc, "SCALE": s_acc }
-                    }
-                }
-            }));
-            scene_nodes.push(node_idx);
         }
+
+        // Build the RVM-node tree (parents inside this exported subtree).
+        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+        for id in &sorted_ids {
+            let pid = nodes.get(id).unwrap().parent_id;
+            if node_index.contains_key(&pid) {
+                children.entry(pid).or_default().push(node_index[id]);
+            }
+        }
+
+        // Emit one named node per RVM node (children: child RVM nodes + own geometry
+        // nodes), then append the geometry nodes. Roots = nodes whose parent is outside.
+        let mut gltf_nodes: Vec<Value> = Vec::with_capacity(sorted_ids.len() + geom_nodes.len());
+        let mut scene_nodes: Vec<u32> = Vec::new();
+        for id in &sorted_ids {
+            let node = nodes.get(id).unwrap();
+            let mut nj = serde_json::Map::new();
+            nj.insert("name".to_string(), json!(name_of(node)));
+            let mut ch: Vec<u32> = children.get(id).cloned().unwrap_or_default();
+            if let Some(g) = node_geoms.get(id) {
+                ch.extend_from_slice(g);
+            }
+            if !ch.is_empty() {
+                nj.insert("children".to_string(), json!(ch));
+            }
+            gltf_nodes.push(Value::Object(nj));
+            if !node_index.contains_key(&node.parent_id) {
+                scene_nodes.push(node_index[id]);
+            }
+        }
+        gltf_nodes.extend(geom_nodes);
 
         println!(
-            "GPU-instanced: {} unique shapes, {} instances, {} meshes, {} nodes",
+            "GPU-instanced: {} unique shapes, {} instances in {} EXT groups, {} meshes, {} nodes",
             shape_geo.len(),
             total_instances,
+            ext_groups,
             meshes.len(),
             gltf_nodes.len()
         );
@@ -934,10 +1011,8 @@ impl GlbWriter {
         while bin.len() % 4 != 0 {
             bin.push(0);
         }
-        let gltf_json = json!({
+        let mut gltf_json = json!({
             "asset": { "version": "2.0", "generator": "rvm2glb" },
-            "extensionsUsed": ["EXT_mesh_gpu_instancing"],
-            "extensionsRequired": ["EXT_mesh_gpu_instancing"],
             "scene": 0,
             "scenes": [{ "nodes": scene_nodes }],
             "nodes": gltf_nodes,
@@ -947,6 +1022,12 @@ impl GlbWriter {
             "bufferViews": buffer_views,
             "buffers": [{ "byteLength": bin.len() }]
         });
+        // Declare the extension only when it is actually used (all-singleton roots stay
+        // plain glTF, identical in shape to `instanced`).
+        if used_ext {
+            gltf_json["extensionsUsed"] = json!(["EXT_mesh_gpu_instancing"]);
+            gltf_json["extensionsRequired"] = json!(["EXT_mesh_gpu_instancing"]);
+        }
         let glb = frame_glb(gltf_json.to_string().as_bytes(), &bin);
         (glb, global_bbox)
     }
@@ -1354,6 +1435,18 @@ fn apply_matrix(m: &[f64; 16], x: f32, y: f32, z: f32) -> (f32, f32, f32) {
     let py = m[1] * x + m[5] * y + m[9] * z + m[13];
     let pz = m[2] * x + m[6] * y + m[10] * z + m[14];
     (px as f32, py as f32, pz as f32)
+}
+
+/// Grow `b` by the 8 corners of a local AABB (`lo`..`hi`) transformed by column-major `m`.
+fn expand_bbox_corners(b: &mut BBox3, m: &[f64; 16], lo: &[f32; 3], hi: &[f32; 3]) {
+    for &cx in &[lo[0], hi[0]] {
+        for &cy in &[lo[1], hi[1]] {
+            for &cz in &[lo[2], hi[2]] {
+                let (x, y, z) = apply_matrix(m, cx, cy, cz);
+                update_bbox(b, x, y, z, x, y, z);
+            }
+        }
+    }
 }
 
 /// Decompose a column-major 4×4 affine matrix into translation, rotation (quaternion
