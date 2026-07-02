@@ -1262,9 +1262,9 @@ fn weld_and_simplify(positions: &[f32], indices: &[u32], c: &Cleanup) -> (Vec<f3
             let v = i as usize * 3;
             let (x, y, z) = (positions[v], positions[v + 1], positions[v + 2]);
             let key = (
-                (x * scale).round() as i64,
-                (y * scale).round() as i64,
-                (z * scale).round() as i64,
+                (x * scale).trunc() as i64,
+                (y * scale).trunc() as i64,
+                (z * scale).trunc() as i64,
             );
             let ni = *key_map.entry(key).or_insert_with(|| {
                 let n = (new_pos.len() / 3) as u32;

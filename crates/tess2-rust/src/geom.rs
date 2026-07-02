@@ -76,15 +76,15 @@ pub fn edge_eval(u_s: Real, u_t: Real, v_s: Real, v_t: Real, w_s: Real, w_t: Rea
 /// coordinate perturbations that rotations introduce.
 #[inline]
 pub fn edge_sign(u_s: Real, u_t: Real, v_s: Real, v_t: Real, w_s: Real, w_t: Real) -> Real {
-    // debug_assert!(vert_leq(u_s, u_t, v_s, v_t) && vert_leq(v_s, v_t, w_s, w_t));
-    let gap_l = v_s - u_s;
-    let gap_r = w_s - v_s;
-    if gap_l + gap_r > 0.0 {
-        (v_t - w_t) * gap_l + (v_t - u_t) * gap_r
-    } else {
-        // Vertical line uvw — collinear on s axis, sign ambiguous.
-        0.0
-    }
+    // libtess2 `#define EdgeSign(u,v,w) tesedgeEval(u,v,w)` (geom.h): the cheap
+    // sign-only form (the former `tesedgeSign`, previously inlined here) returns
+    // the WRONG SIGN when the s-coordinates are nearly equal — SGI/upstream
+    // explicitly switched `EdgeSign` to the accurate normalized evaluator to fix
+    // it.  The cheap form made `check_for_right_splice` flip a decision on
+    // near-degenerate glyph edges, corrupting the sweep (found by the
+    // `fuzz_glyph_discovery` differential test against the C reference).  Match C
+    // exactly: sign tests use the same evaluator as `edge_eval`.
+    edge_eval(u_s, u_t, v_s, v_t, w_s, w_t)
 }
 
 /// Like edge_eval but with s and t transposed.

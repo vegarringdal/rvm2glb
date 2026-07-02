@@ -3,7 +3,7 @@
 // License: SGI Free Software License B (MIT-compatible)
 //
 // Vendored fork for step2glb — the sweep's region accessors fail soft instead
-// of panicking (see src/tess/mod.rs "STEP2GLB PATCH"). Upstream lints are
+// of panicking (see src/tess/region.rs "STEP2GLB PATCH"). Upstream lints are
 // silenced so this vendored copy doesn't add warnings to the workspace build.
 #![allow(warnings, clippy::all)]
 

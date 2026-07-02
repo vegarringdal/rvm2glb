@@ -111,11 +111,11 @@ impl Tessellator {
             let mut e = e_start;
             let mut fv = 0;
             loop {
-                // A degenerate contour can leave an edge with an INVALID (or stale,
-                // out-of-range) origin vertex. Upstream C libtess2 tolerates this; here
-                // a blind `verts[org]` would panic (index 0xFFFFFFFF). Emit TESS_UNDEF
-                // for that corner instead — the caller drops any triangle containing it,
-                // matching how rvm_parser_glb-main filters TESS_UNDEF in the output.
+                // STEP2GLB PATCH: a degenerate contour can leave an edge with an
+                // INVALID (or stale, out-of-range) origin vertex. Upstream C
+                // libtess2 tolerates this; here a blind `verts[org]` would panic
+                // (index 0xFFFFFFFF). Emit TESS_UNDEF for that corner instead —
+                // the caller drops any triangle containing it.
                 let org = mesh.edges[e as usize].org;
                 self.out_elements[ep] = if (org as usize) < mesh.verts.len() {
                     mesh.verts[org as usize].n

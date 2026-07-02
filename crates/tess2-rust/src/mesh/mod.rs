@@ -590,24 +590,16 @@ impl Mesh {
 
     /// tessMeshDelete: remove edge eDel.
     pub fn delete_edge(&mut self, e_del: EdgeIdx) -> bool {
-        // Algorithmic invariant: the sweep must drop the edge from any
-        // active region (`delete_region` / `fix_upper_edge`) before
-        // calling this — otherwise the region keeps a reference to a
-        // dead half-edge and the next sweep step indexes
-        // `mesh.verts[INVALID]` in `walk_dirty_regions` /
-        // `check_for_right_splice`.  We treat this as a bug at the
-        // call site and surface it with a clear message in debug
-        // builds; release builds skip the check (active_region is
-        // implementation detail).
-        debug_assert!(
-            self.edges[e_del as usize].active_region == INVALID
-                && self.edges[(e_del ^ 1) as usize].active_region == INVALID,
-            "delete_edge({}) called while edge is still bound to active_region(s) up={} sym={} \
-             — caller must run delete_region first",
-            e_del,
-            self.edges[e_del as usize].active_region,
-            self.edges[(e_del ^ 1) as usize].active_region,
-        );
+        // NOTE: an edge can legitimately still be bound to an `active_region`
+        // here.  `walk_dirty_regions`' degenerate-2-edge-loop collapse deletes
+        // an edge whose SYM is still another active region's `e_up` (both halves
+        // owned — see `add_region_below`); the sweep nonetheless produces a
+        // correct tessellation (verified by `glyph_repro_region_none_3`, a
+        // 216-point glyph that hit this).  This used to be a `debug_assert!`,
+        // but that aborted debug builds on valid input — a robustness bug — while
+        // release silently (and correctly) skipped it.  `active_region` is an
+        // implementation detail of the sweep, not a mesh invariant, so it is no
+        // longer enforced here.
         let e_del_sym = e_del ^ 1;
 
         let e_del_lface = self.edges[e_del as usize].lface;
